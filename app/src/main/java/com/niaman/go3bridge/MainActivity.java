@@ -75,7 +75,7 @@ public class MainActivity extends Activity {
         root.addView(solve);
 
         Button go3=new Button(this);
-        go3.setText("3. סרוק וחבר GO3");
+        go3.setText("3. חבר GO3 ובדוק כפתור GO");
         root.addView(go3);
 
         result=new TextView(this);
