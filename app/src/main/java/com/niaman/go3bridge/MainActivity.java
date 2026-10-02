@@ -7,6 +7,11 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
 import android.widget.*;
+
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader;
+import com.tom_roush.pdfbox.pdmodel.PDDocument;
+import com.tom_roush.pdfbox.text.PDFTextStripper;
+
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
@@ -15,15 +20,17 @@ import java.util.concurrent.*;
 public class MainActivity extends Activity {
     static final int BANK=10, IMAGE=11;
 
-    EditText key;
-    TextView status, result, diag;
+    TextView authStatus, bankStatus, result, diag;
+    Button authButton;
     String bank="";
-    String vectorStoreId="";
     String knowledgeName="";
     final ExecutorService worker=Executors.newSingleThreadExecutor();
+    ChatGptAuth auth;
 
     @Override public void onCreate(Bundle b){
         super.onCreate(b);
+        PDFBoxResourceLoader.init(getApplicationContext());
+        auth=new ChatGptAuth(this);
         restoreKnowledge();
 
         LinearLayout root=new LinearLayout(this);
@@ -36,18 +43,28 @@ public class MainActivity extends Activity {
         root.addView(title);
 
         TextView sub=new TextView(this);
-        sub.setText("PDF מלא / מאגר שאלות → זיהוי צילום → תשובה מהמאגר → GPT אם לא נמצא");
+        sub.setText("PDF מלא → זיהוי שאלה → חיפוש במאגר → GPT אם לא נמצא");
         sub.setTextSize(15);
         root.addView(sub);
 
-        key=new EditText(this);
-        key.setHint("OpenAI API key");
-        key.setSingleLine(true);
-        root.addView(key,new LinearLayout.LayoutParams(-1,-2));
+        authButton=new Button(this);
+        authButton.setText(auth.isSignedIn() ? "מחובר ל-ChatGPT" : "Continue with ChatGPT");
+        root.addView(authButton);
+
+        authStatus=new TextView(this);
+        authStatus.setText(auth.isSignedIn() ? "ChatGPT: מחובר" : "ChatGPT: לא מחובר");
+        authStatus.setTextSize(15);
+        root.addView(authStatus);
 
         Button load=new Button(this);
         load.setText("1. טען PDF מלא / TXT");
         root.addView(load);
+
+        bankStatus=new TextView(this);
+        bankStatus.setText(bank.isEmpty() ? "מאגר: לא נטען" :
+            "מאגר מוכן: "+knowledgeName+" • "+bank.length()+" תווים");
+        bankStatus.setTextSize(15);
+        root.addView(bankStatus);
 
         Button solve=new Button(this);
         solve.setText("2. בחר צילום שאלה ופתור");
@@ -56,12 +73,6 @@ public class MainActivity extends Activity {
         Button go3=new Button(this);
         go3.setText("3. סרוק וחבר GO3");
         root.addView(go3);
-
-        status=new TextView(this);
-        status.setText(vectorStoreId.isEmpty() ? "מאגר: לא נטען | GO3: לא מחובר" :
-            "PDF מוכן: "+knowledgeName+" | GO3: לא מחובר");
-        status.setTextSize(16);
-        root.addView(status);
 
         result=new TextView(this);
         result.setTextSize(20);
@@ -77,15 +88,47 @@ public class MainActivity extends Activity {
         sc.addView(root);
         setContentView(sc);
 
+        authButton.setOnClickListener(v->connectChatGpt());
         load.setOnClickListener(v->pickBank());
         solve.setOnClickListener(v->pickImage());
-        go3.setOnClickListener(v->new Go3Ble(this, this::log, s->runOnUiThread(()->status.setText(s))).start());
+        go3.setOnClickListener(v->new Go3Ble(this,this::log,s->runOnUiThread(()->log(s))).start());
+    }
+
+    void connectChatGpt(){
+        if(auth.isSignedIn()){
+            Toast.makeText(this,"כבר מחובר ל-ChatGPT",Toast.LENGTH_SHORT).show();
+            return;
+        }
+        authButton.setEnabled(false);
+        auth.signIn(
+            s->runOnUiThread(()->authStatus.setText(s)),
+            ok->runOnUiThread(()->{
+                authButton.setEnabled(true);
+                authButton.setText(ok ? "מחובר ל-ChatGPT" : "Continue with ChatGPT");
+                if(ok)authStatus.setText("ChatGPT: מחובר • שימוש בתוכנית ChatGPT");
+            })
+        );
     }
 
     void restoreKnowledge(){
         SharedPreferences p=getSharedPreferences("go3_bridge",MODE_PRIVATE);
-        vectorStoreId=p.getString("vector_store_id","");
         knowledgeName=p.getString("knowledge_name","");
+        File file=new File(getFilesDir(),"knowledge.txt");
+        if(file.exists()){
+            try(FileInputStream in=new FileInputStream(file)){
+                bank=new String(readAll(in),StandardCharsets.UTF_8);
+            }catch(Exception ignored){ bank=""; }
+        }
+    }
+
+    void persistKnowledge(String text,String name)throws Exception{
+        try(FileOutputStream out=openFileOutput("knowledge.txt",MODE_PRIVATE)){
+            out.write(text.getBytes(StandardCharsets.UTF_8));
+        }
+        getSharedPreferences("go3_bridge",MODE_PRIVATE).edit()
+            .putString("knowledge_name",name==null?"knowledge":name)
+            .apply();
+        knowledgeName=name==null?"knowledge":name;
     }
 
     void pickBank(){
@@ -97,8 +140,12 @@ public class MainActivity extends Activity {
     }
 
     void pickImage(){
-        if(key.getText().toString().trim().isEmpty()){
-            Toast.makeText(this,"הכנס OpenAI API key",Toast.LENGTH_SHORT).show();
+        if(!auth.isSignedIn()){
+            Toast.makeText(this,"קודם לחץ Continue with ChatGPT",Toast.LENGTH_LONG).show();
+            return;
+        }
+        if(bank.trim().isEmpty()){
+            Toast.makeText(this,"קודם טען את ה-PDF המלא",Toast.LENGTH_LONG).show();
             return;
         }
         Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -111,86 +158,66 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode,resultCode,data);
         if(resultCode!=RESULT_OK||data==null||data.getData()==null)return;
         Uri u=data.getData();
-        if(requestCode==BANK) loadKnowledge(u);
-        if(requestCode==IMAGE) solve(u);
+        if(requestCode==BANK)loadKnowledge(u);
+        if(requestCode==IMAGE)solve(u);
     }
 
     void loadKnowledge(Uri u){
-        String mime=getContentResolver().getType(u);
         String name=getName(u);
+        String mime=getContentResolver().getType(u);
         boolean pdf="application/pdf".equalsIgnoreCase(mime) ||
             (name!=null&&name.toLowerCase(Locale.ROOT).endsWith(".pdf"));
 
-        if(pdf){
-            String k=key.getText().toString().trim();
-            if(k.isEmpty()){
-                Toast.makeText(this,"כדי להעלות PDF מלא יש להכניס OpenAI API key",Toast.LENGTH_LONG).show();
-                return;
-            }
-            status.setText("מעלה PDF ומכין מאגר חיפוש...");
-            worker.execute(()->{
-                try{
-                    long size=getLength(u);
-                    if(size>50L*1024L*1024L)
-                        throw new IOException("PDF גדול מ-50MB");
-                    byte[] bytes=readBytes(u);
-                    OpenAiHelper ai=new OpenAiHelper(k);
-                    String vs=ai.uploadPdfAndCreateKnowledgeBase(bytes,name==null?"knowledge.pdf":name);
-                    vectorStoreId=vs;
-                    knowledgeName=name==null?"knowledge.pdf":name;
-                    getSharedPreferences("go3_bridge",MODE_PRIVATE).edit()
-                        .putString("vector_store_id",vectorStoreId)
-                        .putString("knowledge_name",knowledgeName)
-                        .apply();
-                    bank="";
-                    runOnUiThread(()->status.setText("PDF מוכן לחיפוש: "+knowledgeName));
-                    log("Vector store ready: "+vectorStoreId);
-                }catch(Exception e){
-                    runOnUiThread(()->status.setText("שגיאה בהעלאת PDF"));
-                    log("PDF error: "+e.getMessage());
+        bankStatus.setText(pdf ? "קורא את ה-PDF המלא..." : "טוען TXT...");
+        worker.execute(()->{
+            try{
+                String text=pdf ? extractPdf(u) : new String(readBytes(u),StandardCharsets.UTF_8);
+                text=text.replace("\u0000","").trim();
+                if(text.length()<300){
+                    throw new IOException("לא נמצא מספיק טקסט ב-PDF. ייתכן שזה PDF סרוק כתמונות.");
                 }
-            });
-        }else{
-            worker.execute(()->{
-                try{
-                    bank=readText(u);
-                    vectorStoreId="";
-                    knowledgeName=name==null?"TXT":name;
-                    getSharedPreferences("go3_bridge",MODE_PRIVATE).edit()
-                        .remove("vector_store_id")
-                        .putString("knowledge_name",knowledgeName)
-                        .apply();
-                    runOnUiThread(()->status.setText("TXT נטען: "+bank.length()+" תווים"));
-                }catch(Exception e){ log("Bank error: "+e.getMessage()); }
-            });
+                bank=text;
+                persistKnowledge(bank,name);
+                String msg="מאגר מוכן: "+knowledgeName+" • "+bank.length()+" תווים";
+                runOnUiThread(()->bankStatus.setText(msg));
+                log("Knowledge ready. Characters: "+bank.length());
+            }catch(Exception e){
+                bank="";
+                runOnUiThread(()->bankStatus.setText("שגיאה בקריאת המאגר"));
+                log("PDF/TXT error: "+e.getMessage());
+            }
+        });
+    }
+
+    String extractPdf(Uri u)throws Exception{
+        try(InputStream in=getContentResolver().openInputStream(u)){
+            if(in==null)throw new IOException("Cannot open PDF");
+            try(PDDocument doc=PDDocument.load(in)){
+                PDFTextStripper stripper=new PDFTextStripper();
+                stripper.setSortByPosition(true);
+                return stripper.getText(doc);
+            }
         }
     }
 
     void solve(Uri u){
-        result.setText("מעבד...");
-        String k=key.getText().toString().trim();
+        result.setText("מזהה את השאלה...");
         String imageMime=getContentResolver().getType(u);
 
         worker.execute(()->{
             try{
+                String token=auth.getAccessToken();
                 byte[] image=readBytes(u);
-                OpenAiHelper ai=new OpenAiHelper(k);
+                OpenAiHelper ai=new OpenAiHelper(token);
+
                 String q=ai.extractQuestion(image,imageMime);
                 log("Recognized: "+q);
 
-                if(!vectorStoreId.isEmpty()){
-                    show("מחפש ב-PDF...");
-                    String a=ai.answerFromKnowledgeBase(q,vectorStoreId);
-                    if(a!=null&&!a.toUpperCase(Locale.ROOT).contains("NOT_FOUND")){
-                        show("PDF\n"+a);
-                        return;
-                    }
-                    log("No reliable PDF match; using GPT.");
-                }
-
-                if(bank!=null&&!bank.trim().isEmpty()){
-                    BankMatcher.Match m=BankMatcher.best(q,bank);
-                    if(m!=null&&m.score>=0.38){
+                BankMatcher.Match m=BankMatcher.best(q,bank);
+                if(m!=null){
+                    log("Best bank score: "+String.format(Locale.US,"%.3f",m.score));
+                    if(m.score>=0.18){
+                        show("נמצאה התאמה במאגר...");
                         String a=ai.answerFromRecord(q,m.block);
                         if(a!=null&&!a.toUpperCase(Locale.ROOT).contains("NOT_FOUND")){
                             show("מאגר "+String.format(Locale.US,"%.2f",m.score)+"\n"+a);
@@ -199,7 +226,9 @@ public class MainActivity extends Activity {
                     }
                 }
 
-                show("GPT\n"+ai.solveImage(image,imageMime));
+                show("לא נמצאה התאמה בטוחה • GPT פותר...");
+                String solved=ai.solveImage(image,imageMime);
+                show("GPT\n"+solved);
             }catch(Exception e){
                 show("שגיאה: "+e.getMessage());
                 log("Solve error: "+e.getMessage());
@@ -218,39 +247,26 @@ public class MainActivity extends Activity {
         }finally{
             if(c!=null)c.close();
         }
-        return "knowledge.pdf";
-    }
-
-    long getLength(Uri u){
-        Cursor c=null;
-        try{
-            c=getContentResolver().query(u,null,null,null,null);
-            if(c!=null&&c.moveToFirst()){
-                int i=c.getColumnIndex(OpenableColumns.SIZE);
-                if(i>=0&&!c.isNull(i))return c.getLong(i);
-            }
-        }finally{
-            if(c!=null)c.close();
-        }
-        return -1;
-    }
-
-    String readText(Uri u)throws Exception{
-        return new String(readBytes(u),StandardCharsets.UTF_8);
+        return "knowledge";
     }
 
     byte[] readBytes(Uri u)throws Exception{
-        try(InputStream in=getContentResolver().openInputStream(u);
-            ByteArrayOutputStream out=new ByteArrayOutputStream()){
+        try(InputStream in=getContentResolver().openInputStream(u)){
             if(in==null)throw new IOException("Cannot open file");
+            return readAll(in);
+        }
+    }
+
+    byte[] readAll(InputStream in)throws Exception{
+        try(ByteArrayOutputStream out=new ByteArrayOutputStream()){
             byte[] b=new byte[8192]; int n;
             while((n=in.read(b))>0)out.write(b,0,n);
             return out.toByteArray();
         }
     }
 
-    void show(String s){ runOnUiThread(()->result.setText(s)); }
-    void log(String s){ runOnUiThread(()->diag.setText((diag.getText()+"\n"+s).trim())); }
+    void show(String s){runOnUiThread(()->result.setText(s));}
+    void log(String s){runOnUiThread(()->diag.setText((diag.getText()+"\n"+s).trim()));}
 
     @Override protected void onDestroy(){
         super.onDestroy();
