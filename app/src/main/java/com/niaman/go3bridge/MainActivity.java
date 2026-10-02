@@ -268,6 +268,16 @@ public class MainActivity extends Activity {
     void show(String s){runOnUiThread(()->result.setText(s));}
     void log(String s){runOnUiThread(()->diag.setText((diag.getText()+"\n"+s).trim()));}
 
+    @Override protected void onResume(){
+        super.onResume();
+        if(auth!=null&&authButton!=null&&authStatus!=null){
+            boolean signed=auth.isSignedIn();
+            authButton.setEnabled(true);
+            authButton.setText(signed ? "מחובר ל-ChatGPT" : "Continue with ChatGPT");
+            authStatus.setText(signed ? "ChatGPT: מחובר • שימוש בתוכנית ChatGPT" : "ChatGPT: לא מחובר");
+        }
+    }
+
     @Override protected void onDestroy(){
         super.onDestroy();
         worker.shutdownNow();
