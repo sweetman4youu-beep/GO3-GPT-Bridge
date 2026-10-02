@@ -29,6 +29,7 @@ public class MainActivity extends Activity {
     QuestionBank questionBank=new QuestionBank();
     final ExecutorService worker=Executors.newSingleThreadExecutor();
     ChatGptAuth auth;
+    Go3Ble go3Ble;
 
     @Override public void onCreate(Bundle b){
         super.onCreate(b);
@@ -94,7 +95,10 @@ public class MainActivity extends Activity {
         authButton.setOnClickListener(v->connectChatGpt());
         load.setOnClickListener(v->pickBank());
         solve.setOnClickListener(v->pickImage());
-        go3.setOnClickListener(v->new Go3Ble(this,this::log,s->runOnUiThread(()->log(s))).start());
+        go3.setOnClickListener(v->{
+            if(go3Ble==null)go3Ble=new Go3Ble(this,this::log,s->runOnUiThread(()->log(s)));
+            go3Ble.start();
+        });
     }
 
     void connectChatGpt(){
@@ -321,7 +325,22 @@ public class MainActivity extends Activity {
         }
     }
 
+    @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] grantResults){
+        super.onRequestPermissionsResult(requestCode,permissions,grantResults);
+        if(requestCode==Go3Ble.REQ_BT){
+            boolean ok=true;
+            for(int r:grantResults)if(r!=android.content.pm.PackageManager.PERMISSION_GRANTED)ok=false;
+            if(ok){
+                if(go3Ble==null)go3Ble=new Go3Ble(this,this::log,s->runOnUiThread(()->log(s)));
+                go3Ble.start();
+            }else{
+                log("Bluetooth permission denied");
+            }
+        }
+    }
+
     @Override protected void onDestroy(){
+        if(go3Ble!=null)go3Ble.stop();
         super.onDestroy();
         worker.shutdownNow();
     }
