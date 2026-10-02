@@ -26,6 +26,7 @@ public class MainActivity extends Activity {
     Button authButton;
     String bank="";
     String knowledgeName="";
+    QuestionBank questionBank=new QuestionBank();
     final ExecutorService worker=Executors.newSingleThreadExecutor();
     ChatGptAuth auth;
 
@@ -64,7 +65,7 @@ public class MainActivity extends Activity {
 
         bankStatus=new TextView(this);
         bankStatus.setText(bank.isEmpty() ? "מאגר: לא נטען" :
-            "מאגר מוכן: "+knowledgeName+" • "+bank.length()+" תווים");
+            "מאגר מוכן: "+knowledgeName+" • "+questionBank.size()+" שאלות");
         bankStatus.setTextSize(15);
         root.addView(bankStatus);
 
@@ -119,7 +120,8 @@ public class MainActivity extends Activity {
         if(file.exists()){
             try(FileInputStream in=new FileInputStream(file)){
                 bank=new String(readAll(in),StandardCharsets.UTF_8);
-            }catch(Exception ignored){ bank=""; }
+                questionBank=QuestionBank.parse(bank);
+            }catch(Exception ignored){ bank=""; questionBank=new QuestionBank(); }
         }
     }
 
@@ -179,10 +181,12 @@ public class MainActivity extends Activity {
                     throw new IOException("לא נמצא מספיק טקסט ב-PDF. ייתכן שזה PDF סרוק כתמונות.");
                 }
                 bank=text;
+                questionBank=QuestionBank.parse(bank);
                 persistKnowledge(bank,name);
-                String msg="מאגר מוכן: "+knowledgeName+" • "+bank.length()+" תווים";
+                String msg="מאגר מוכן: "+knowledgeName+" • "+questionBank.size()+" שאלות";
                 runOnUiThread(()->bankStatus.setText(msg));
-                log("Knowledge ready. Characters: "+bank.length());
+                log("Knowledge ready. Characters: "+bank.length()+", parsed questions: "+questionBank.size());
+                if(questionBank.size()<700)log("Warning: expected about 800 PDD questions; parsed only "+questionBank.size());
             }catch(Exception e){
                 bank="";
                 runOnUiThread(()->bankStatus.setText("שגיאה בקריאת המאגר"));
@@ -217,20 +221,24 @@ public class MainActivity extends Activity {
                 String q=ai.extractQuestion(image,imageMime);
                 log("Recognized: "+q);
 
-                BankMatcher.Match m=BankMatcher.best(q,bank);
-                if(m!=null){
-                    log("Best bank score: "+String.format(Locale.US,"%.3f",m.score));
-                    if(m.score>=0.18){
-                        show("נמצאה התאמה במאגר...");
-                        String a=ai.answerFromRecord(q,m.block);
-                        if(a!=null&&!a.toUpperCase(Locale.ROOT).contains("NOT_FOUND")){
-                            show("מאגר "+String.format(Locale.US,"%.2f",m.score)+"\n"+a);
-                            return;
-                        }
+                QuestionBank.Match pm=questionBank.best(q);
+                if(pm!=null&&pm.entry!=null){
+                    log("PDD bank: ticket "+pm.entry.ticket+", question "+pm.entry.question+
+                        ", score "+String.format(Locale.US,"%.3f",pm.score)+
+                        ", second "+String.format(Locale.US,"%.3f",pm.secondScore)+
+                        ", stored answer "+pm.entry.correctIndex);
+                    if(pm.reliable()){
+                        String a=pm.entry.answer();
+                        show("מאגר PDF • כרטיס "+pm.entry.ticket+" / שאלה "+pm.entry.question+
+                            "\nתשובה: "+a);
+                        return;
                     }
                 }
 
-                show("לא נמצאה התאמה בטוחה • GPT פותר...");
+                BankMatcher.Match m=BankMatcher.best(q,bank);
+                if(m!=null)log("Fallback text score: "+String.format(Locale.US,"%.3f",m.score));
+
+                show("לא נמצאה התאמה בטוחה במאגר • GPT פותר...");
                 String solved=ai.solveImage(image,imageMime);
                 show("GPT\n"+solved);
             }catch(Exception e){
