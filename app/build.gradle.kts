@@ -10,8 +10,8 @@ android {
         applicationId = "com.niaman.go3bridge.fresh"
         minSdk = 31
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.7.1-fresh"
+        versionCode = 2
+        versionName = "0.7.2-fresh"
     }
 
     buildTypes {
