@@ -154,7 +154,7 @@ public class AuthCallbackService extends Service {
             String html="<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'></head>"+
                 "<body style='font-family:sans-serif;padding:32px;text-align:center'>"+
                 "<h2 style='color:"+color+"'>GO3 GPT Bridge</h2><p>"+escape(message)+"</p>"+
-                "<p><a href='go3bridge://auth-done' style='font-size:20px'>חזרה לאפליקציה</a></p></body></html>";
+                "<p><a href='go3bridge081://auth-done' style='font-size:20px'>חזרה לאפליקציה</a></p></body></html>";
             byte[] body=html.getBytes(StandardCharsets.UTF_8);
             OutputStream os=s.getOutputStream();
             String hdr="HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: "+body.length+"\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n";
