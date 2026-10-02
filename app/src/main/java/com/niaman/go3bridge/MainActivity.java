@@ -102,7 +102,7 @@ public class MainActivity extends Activity {
         notifyTest.setOnClickListener(v->notifyAnswerNumber("1"));
         if(Build.VERSION.SDK_INT<33 ||
            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED){
-            notifyAnswer("GO3 Bridge מוכן");
+            notifyAnswerNumber("1");
         }
     }
 
@@ -326,32 +326,37 @@ public class MainActivity extends Activity {
         }
     }
 
-    void notifyAnswer(String text){
+    String extractAnswerNumber(String text){
+        if(text==null)return "?";
+        java.util.regex.Matcher m=java.util.regex.Pattern
+            .compile("(?<!\\d)([1-4])(?!\\d)")
+            .matcher(text);
+        return m.find()?m.group(1):"?";
+    }
+
+    void notifyAnswerNumber(String number){
         runOnUiThread(()->{
             if(Build.VERSION.SDK_INT>=33 &&
                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED){
                 log("Notification permission is not granted");
                 return;
             }
-            String compact=text==null?"":text.replace("\n"," ").trim();
-            if(compact.length()>220)compact=compact.substring(0,220);
-            Person sender=new Person.Builder().setName("GO3 Bridge").build();
-            Notification.MessagingStyle style=new Notification.MessagingStyle(sender)
-                .setConversationTitle("GO3 Bridge")
-                .addMessage(compact,System.currentTimeMillis(),sender);
+            String compact=number==null?"?":number.trim();
+            if(!compact.matches("[1-4]"))compact=extractAnswerNumber(compact);
+
             Notification.Builder b=new Notification.Builder(this,ANSWER_CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle("GO3 Bridge")
+                .setContentTitle(" ")
                 .setContentText(compact)
-                .setStyle(style)
-                .setCategory(Notification.CATEGORY_MESSAGE)
+                .setCategory(Notification.CATEGORY_STATUS)
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
                 .setPriority(Notification.PRIORITY_HIGH)
-                .setAutoCancel(false)
-                .setOngoing(true)
-                .setOnlyAlertOnce(true);
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(true)
+                .setSilent(true);
+
             getSystemService(NotificationManager.class).notify(1001,b.build());
-            log("Answer notification sent");
+            log("Answer number notification sent: "+compact);
         });
     }
 
