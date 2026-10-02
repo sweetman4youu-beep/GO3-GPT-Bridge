@@ -2,23 +2,30 @@ package com.niaman.go3bridge;
 
 import android.app.Activity;
 import android.content.*;
+import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
-import android.view.ViewGroup;
+import android.provider.OpenableColumns;
 import android.widget.*;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.util.concurrent.*;
 
 public class MainActivity extends Activity {
     static final int BANK=10, IMAGE=11;
+
     EditText key;
     TextView status, result, diag;
     String bank="";
+    String vectorStoreId="";
+    String knowledgeName="";
     final ExecutorService worker=Executors.newSingleThreadExecutor();
 
     @Override public void onCreate(Bundle b){
         super.onCreate(b);
+        restoreKnowledge();
+
         LinearLayout root=new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(24,24,24,24);
@@ -28,12 +35,18 @@ public class MainActivity extends Activity {
         title.setTextSize(26);
         root.addView(title);
 
+        TextView sub=new TextView(this);
+        sub.setText("PDF מלא / מאגר שאלות → זיהוי צילום → תשובה מהמאגר → GPT אם לא נמצא");
+        sub.setTextSize(15);
+        root.addView(sub);
+
         key=new EditText(this);
         key.setHint("OpenAI API key");
+        key.setSingleLine(true);
         root.addView(key,new LinearLayout.LayoutParams(-1,-2));
 
         Button load=new Button(this);
-        load.setText("1. טען מאגר שאלות");
+        load.setText("1. טען PDF מלא / TXT");
         root.addView(load);
 
         Button solve=new Button(this);
@@ -45,7 +58,9 @@ public class MainActivity extends Activity {
         root.addView(go3);
 
         status=new TextView(this);
-        status.setText("מאגר: לא נטען | GO3: לא מחובר");
+        status.setText(vectorStoreId.isEmpty() ? "מאגר: לא נטען | GO3: לא מחובר" :
+            "PDF מוכן: "+knowledgeName+" | GO3: לא מחובר");
+        status.setTextSize(16);
         root.addView(status);
 
         result=new TextView(this);
@@ -67,9 +82,16 @@ public class MainActivity extends Activity {
         go3.setOnClickListener(v->new Go3Ble(this, this::log, s->runOnUiThread(()->status.setText(s))).start());
     }
 
+    void restoreKnowledge(){
+        SharedPreferences p=getSharedPreferences("go3_bridge",MODE_PRIVATE);
+        vectorStoreId=p.getString("vector_store_id","");
+        knowledgeName=p.getString("knowledge_name","");
+    }
+
     void pickBank(){
         Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        i.setType("text/*");
+        i.setType("*/*");
+        i.putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"application/pdf","text/plain"});
         i.addCategory(Intent.CATEGORY_OPENABLE);
         startActivityForResult(i,BANK);
     }
@@ -89,39 +111,128 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode,resultCode,data);
         if(resultCode!=RESULT_OK||data==null||data.getData()==null)return;
         Uri u=data.getData();
-        if(requestCode==BANK) loadBank(u);
+        if(requestCode==BANK) loadKnowledge(u);
         if(requestCode==IMAGE) solve(u);
     }
 
-    void loadBank(Uri u){
-        worker.execute(()->{
-            try{
-                bank=readText(u);
-                runOnUiThread(()->status.setText("מאגר נטען: "+bank.length()+" תווים"));
-            }catch(Exception e){ log("Bank error: "+e.getMessage()); }
-        });
+    void loadKnowledge(Uri u){
+        String mime=getContentResolver().getType(u);
+        String name=getName(u);
+        boolean pdf="application/pdf".equalsIgnoreCase(mime) ||
+            (name!=null&&name.toLowerCase(Locale.ROOT).endsWith(".pdf"));
+
+        if(pdf){
+            String k=key.getText().toString().trim();
+            if(k.isEmpty()){
+                Toast.makeText(this,"כדי להעלות PDF מלא יש להכניס OpenAI API key",Toast.LENGTH_LONG).show();
+                return;
+            }
+            status.setText("מעלה PDF ומכין מאגר חיפוש...");
+            worker.execute(()->{
+                try{
+                    long size=getLength(u);
+                    if(size>50L*1024L*1024L)
+                        throw new IOException("PDF גדול מ-50MB");
+                    byte[] bytes=readBytes(u);
+                    OpenAiHelper ai=new OpenAiHelper(k);
+                    String vs=ai.uploadPdfAndCreateKnowledgeBase(bytes,name==null?"knowledge.pdf":name);
+                    vectorStoreId=vs;
+                    knowledgeName=name==null?"knowledge.pdf":name;
+                    getSharedPreferences("go3_bridge",MODE_PRIVATE).edit()
+                        .putString("vector_store_id",vectorStoreId)
+                        .putString("knowledge_name",knowledgeName)
+                        .apply();
+                    bank="";
+                    runOnUiThread(()->status.setText("PDF מוכן לחיפוש: "+knowledgeName));
+                    log("Vector store ready: "+vectorStoreId);
+                }catch(Exception e){
+                    runOnUiThread(()->status.setText("שגיאה בהעלאת PDF"));
+                    log("PDF error: "+e.getMessage());
+                }
+            });
+        }else{
+            worker.execute(()->{
+                try{
+                    bank=readText(u);
+                    vectorStoreId="";
+                    knowledgeName=name==null?"TXT":name;
+                    getSharedPreferences("go3_bridge",MODE_PRIVATE).edit()
+                        .remove("vector_store_id")
+                        .putString("knowledge_name",knowledgeName)
+                        .apply();
+                    runOnUiThread(()->status.setText("TXT נטען: "+bank.length()+" תווים"));
+                }catch(Exception e){ log("Bank error: "+e.getMessage()); }
+            });
+        }
     }
 
     void solve(Uri u){
         result.setText("מעבד...");
         String k=key.getText().toString().trim();
+        String imageMime=getContentResolver().getType(u);
+
         worker.execute(()->{
             try{
                 byte[] image=readBytes(u);
                 OpenAiHelper ai=new OpenAiHelper(k);
-                String q=ai.extractQuestion(image);
+                String q=ai.extractQuestion(image,imageMime);
                 log("Recognized: "+q);
-                BankMatcher.Match m=BankMatcher.best(q,bank);
-                if(m!=null&&m.score>=0.38){
-                    String a=ai.answerFromRecord(q,m.block);
-                    if(!a.toUpperCase().contains("NOT_FOUND")){
-                        show("מאגר "+String.format(java.util.Locale.US,"%.2f",m.score)+"\n"+a);
+
+                if(!vectorStoreId.isEmpty()){
+                    show("מחפש ב-PDF...");
+                    String a=ai.answerFromKnowledgeBase(q,vectorStoreId);
+                    if(a!=null&&!a.toUpperCase(Locale.ROOT).contains("NOT_FOUND")){
+                        show("PDF\n"+a);
                         return;
                     }
+                    log("No reliable PDF match; using GPT.");
                 }
-                show("GPT\n"+ai.solveImage(image));
-            }catch(Exception e){ show("שגיאה: "+e.getMessage()); }
+
+                if(bank!=null&&!bank.trim().isEmpty()){
+                    BankMatcher.Match m=BankMatcher.best(q,bank);
+                    if(m!=null&&m.score>=0.38){
+                        String a=ai.answerFromRecord(q,m.block);
+                        if(a!=null&&!a.toUpperCase(Locale.ROOT).contains("NOT_FOUND")){
+                            show("מאגר "+String.format(Locale.US,"%.2f",m.score)+"\n"+a);
+                            return;
+                        }
+                    }
+                }
+
+                show("GPT\n"+ai.solveImage(image,imageMime));
+            }catch(Exception e){
+                show("שגיאה: "+e.getMessage());
+                log("Solve error: "+e.getMessage());
+            }
         });
+    }
+
+    String getName(Uri u){
+        Cursor c=null;
+        try{
+            c=getContentResolver().query(u,null,null,null,null);
+            if(c!=null&&c.moveToFirst()){
+                int i=c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                if(i>=0)return c.getString(i);
+            }
+        }finally{
+            if(c!=null)c.close();
+        }
+        return "knowledge.pdf";
+    }
+
+    long getLength(Uri u){
+        Cursor c=null;
+        try{
+            c=getContentResolver().query(u,null,null,null,null);
+            if(c!=null&&c.moveToFirst()){
+                int i=c.getColumnIndex(OpenableColumns.SIZE);
+                if(i>=0&&!c.isNull(i))return c.getLong(i);
+            }
+        }finally{
+            if(c!=null)c.close();
+        }
+        return -1;
     }
 
     String readText(Uri u)throws Exception{
