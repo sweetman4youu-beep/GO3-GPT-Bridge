@@ -2,6 +2,7 @@ package com.niaman.go3bridge;
 
 import android.app.*;
 import android.content.*;
+import android.content.pm.ServiceInfo;
 import android.net.Uri;
 import android.os.Build;
 
