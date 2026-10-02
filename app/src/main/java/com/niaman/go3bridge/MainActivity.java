@@ -3,6 +3,8 @@ package com.niaman.go3bridge;
 import android.app.Activity;
 import android.content.*;
 import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.ImageDecoder;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
@@ -202,12 +204,14 @@ public class MainActivity extends Activity {
 
     void solve(Uri u){
         result.setText("מזהה את השאלה...");
-        String imageMime=getContentResolver().getType(u);
+        String originalMime=getContentResolver().getType(u);
 
         worker.execute(()->{
             try{
                 String token=auth.getAccessToken();
-                byte[] image=readBytes(u);
+                byte[] image=normalizeImageToJpeg(u);
+                String imageMime="image/jpeg";
+                log("Image normalized: "+originalMime+" → image/jpeg, "+image.length+" bytes");
                 OpenAiHelper ai=new OpenAiHelper(token);
 
                 String q=ai.extractQuestion(image,imageMime);
@@ -234,6 +238,28 @@ public class MainActivity extends Activity {
                 log("Solve error: "+e.getMessage());
             }
         });
+    }
+
+    byte[] normalizeImageToJpeg(Uri u)throws Exception{
+        ImageDecoder.Source source=ImageDecoder.createSource(getContentResolver(),u);
+        Bitmap bitmap=ImageDecoder.decodeBitmap(source,(decoder,info,src)->{
+            decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+            int w=info.getSize().getWidth();
+            int h=info.getSize().getHeight();
+            int max=Math.max(w,h);
+            if(max>2048){
+                float scale=2048f/max;
+                decoder.setTargetSize(Math.max(1,Math.round(w*scale)),Math.max(1,Math.round(h*scale)));
+            }
+        });
+        if(bitmap==null)throw new IOException("לא ניתן לפענח את התמונה");
+        try(ByteArrayOutputStream out=new ByteArrayOutputStream()){
+            if(!bitmap.compress(Bitmap.CompressFormat.JPEG,92,out))
+                throw new IOException("לא ניתן להמיר את התמונה ל-JPEG");
+            return out.toByteArray();
+        }finally{
+            bitmap.recycle();
+        }
     }
 
     String getName(Uri u){
