@@ -14,7 +14,19 @@ android {
         versionName = "1.0.0-safe"
     }
 
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("go3bridge-debug.jks")
+            storePassword = "go3bridge"
+            keyAlias = "go3bridge"
+            keyPassword = "go3bridge"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = false
         }
