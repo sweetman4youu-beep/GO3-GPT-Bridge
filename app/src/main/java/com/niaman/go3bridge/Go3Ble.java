@@ -35,7 +35,7 @@ public class Go3Ble {
                 Manifest.permission.BLUETOOTH_SCAN,
                 Manifest.permission.BLUETOOTH_CONNECT
             },REQ_BT);
-            state.accept("GO3/Ring: צריך לאשר Bluetooth ואז הסריקה תתחיל");
+            state.accept("GO3: צריך לאשר Bluetooth ואז הסריקה תתחיל");
             return;
         }
 
@@ -59,8 +59,8 @@ public class Go3Ble {
         stopScan();
         gatts.clear();
         scanning=true;
-        state.accept("סורק GO3 + Ring...");
-        log.accept("BLE scan started. Looking for INMO GO3 / INMO Ring");
+        state.accept("סורק GO3...");
+        log.accept("BLE scan started. Looking for INMO GO3 only");
         scanner.startScan(scanCallback);
         handler.postDelayed(this::stopScan,15000);
     }
@@ -93,7 +93,7 @@ public class Go3Ble {
             if(name==null)return;
 
             String upper=name.toUpperCase(Locale.ROOT);
-            if(!(upper.contains("INMO GO3")||upper.contains("INMO RING")))return;
+            if(!upper.contains("INMO GO3"))return;
 
             String addr=d.getAddress();
             if(gatts.containsKey(addr))return;
@@ -146,7 +146,7 @@ public class Go3Ble {
                 }
             }
             state.accept(name+": GATT מוכן • notifications "+notifyCount);
-            log.accept(name+" ready. Press/tap Ring controls now; incoming bytes will appear below.");
+            log.accept(name+" ready. Press the GO button now (single/double/long); incoming bytes will appear below.");
         }
 
         @Override public void onCharacteristicChanged(BluetoothGatt gatt,BluetoothGattCharacteristic c){
