@@ -7,11 +7,11 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.niaman.go3bridge.fresh"
+        applicationId = "com.niaman.go3bridge.v081"
         minSdk = 31
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.8.1-fresh"
+        versionCode = 1
+        versionName = "0.8.1-standalone"
     }
 
     buildTypes {
