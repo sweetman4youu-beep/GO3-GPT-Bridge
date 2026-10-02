@@ -24,7 +24,7 @@ import java.util.concurrent.*;
 
 public class MainActivity extends Activity {
     static final int BANK=10, IMAGE=11, NOTIFY_PERMISSION=12;
-    static final String ANSWER_CHANNEL="go3_answers";
+    static final String ANSWER_CHANNEL="go3_answers_v2";
 
     TextView authStatus, bankStatus, result, diag;
     Button authButton;
@@ -99,7 +99,7 @@ public class MainActivity extends Activity {
         authButton.setOnClickListener(v->connectChatGpt());
         load.setOnClickListener(v->pickBank());
         solve.setOnClickListener(v->pickImage());
-        notifyTest.setOnClickListener(v->notifyAnswer("בדיקת GO3 Bridge: 1. 0,8 мм"));
+        notifyTest.setOnClickListener(v->notifyAnswerNumber("1"));
         if(Build.VERSION.SDK_INT<33 ||
            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED){
             notifyAnswer("GO3 Bridge מוכן");
@@ -240,7 +240,7 @@ public class MainActivity extends Activity {
                         String a=pm.entry.answer();
                         show("מאגר PDF • כרטיס "+pm.entry.ticket+" / שאלה "+pm.entry.question+
                             "\nתשובה: "+a);
-                        notifyAnswer(a);
+                        notifyAnswerNumber(String.valueOf(pm.entry.correctIndex));
                         return;
                     }
                 }
@@ -251,7 +251,7 @@ public class MainActivity extends Activity {
                 show("לא נמצאה התאמה בטוחה במאגר • GPT פותר...");
                 String solved=ai.solveImage(image,imageMime);
                 show("GPT\n"+solved);
-                notifyAnswer(solved);
+                notifyAnswerNumber(extractAnswerNumber(solved));
             }catch(Exception e){
                 show("שגיאה: "+e.getMessage());
                 log("Solve error: "+e.getMessage());
