@@ -12,12 +12,12 @@
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
         <service
-            android:name=".AuthCallbackService"
+            android:name="com.niaman.go3bridge.AuthCallbackService"
             android:exported="false"
             android:foregroundServiceType="shortService" />
 
         <activity
-            android:name=".MainActivity"
+            android:name="com.niaman.go3bridge.MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
