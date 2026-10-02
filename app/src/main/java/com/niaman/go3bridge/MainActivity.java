@@ -329,7 +329,7 @@ public class MainActivity extends Activity {
     String extractAnswerNumber(String text){
         if(text==null)return "?";
         java.util.regex.Matcher m=java.util.regex.Pattern
-            .compile("(?<!\\d)([1-4])(?!\\d)")
+            .compile("(?<!\\d)([1-9][0-9]*)(?!\\d)")
             .matcher(text);
         return m.find()?m.group(1):"?";
     }
@@ -342,7 +342,7 @@ public class MainActivity extends Activity {
                 return;
             }
             String compact=number==null?"?":number.trim();
-            if(!compact.matches("[1-4]"))compact=extractAnswerNumber(compact);
+            if(!compact.matches("[1-9][0-9]*"))compact=extractAnswerNumber(compact);
 
             Notification.Builder b=new Notification.Builder(this,ANSWER_CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
@@ -353,7 +353,9 @@ public class MainActivity extends Activity {
                 .setPriority(Notification.PRIORITY_HIGH)
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(true)
-                .setSilent(true);
+                .setSound(null)
+                .setVibrate(new long[]{0L})
+                .setDefaults(0);
 
             getSystemService(NotificationManager.class).notify(1001,b.build());
             log("Answer number notification sent: "+compact);
@@ -364,7 +366,7 @@ public class MainActivity extends Activity {
         super.onRequestPermissionsResult(requestCode,permissions,grantResults);
         if(requestCode==NOTIFY_PERMISSION && grantResults.length>0 &&
            grantResults[0]==PackageManager.PERMISSION_GRANTED){
-            notifyAnswer("GO3 Bridge מוכן");
+            notifyAnswerNumber("1");
         }
     }
 
