@@ -3,6 +3,9 @@ package com.niaman.go3bridge;
 import android.app.Activity;
 import android.content.*;
 import android.net.Uri;
+import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 
 import org.json.JSONObject;
 
@@ -12,8 +15,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.*;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
 public class ChatGptAuth {
@@ -25,7 +26,6 @@ public class ChatGptAuth {
     private final Activity activity;
     private final SecureStore secure;
     private final SharedPreferences prefs;
-    private final ExecutorService worker=Executors.newSingleThreadExecutor();
 
     public ChatGptAuth(Activity activity){
         this.activity=activity;
@@ -40,104 +40,94 @@ public class ChatGptAuth {
         return !secure.get("access_token").isEmpty() && !prefs.getString("client_id","").isEmpty();
     }
 
-    public void signIn(Consumer<String> status, Consumer<Boolean> done){
-        worker.execute(()->{
-            ServerSocket server=null;
-            try{
-                status.accept("פותח התחברות ל-ChatGPT...");
-                server=new ServerSocket(0,1,InetAddress.getByName("127.0.0.1"));
-                server.setSoTimeout(180000);
-                int port=server.getLocalPort();
-                String redirect="http://127.0.0.1:"+port+"/auth/callback";
-
-                String state=randomUrl(24);
-                String nonce=randomUrl(24);
-                String verifier=randomUrl(48);
-                String challenge=base64Url(MessageDigest.getInstance("SHA-256")
-                    .digest(verifier.getBytes(StandardCharsets.US_ASCII)));
-
-                String savedClient=prefs.getString("client_id","");
-                boolean first=savedClient.isEmpty();
-                String client=first?"dynamic_agent_client":savedClient;
-
-                Uri.Builder b=Uri.parse(AUTH).buildUpon()
-                    .appendQueryParameter("client_id",client)
-                    .appendQueryParameter("ext_agent_host_id",prefs.getString("host_id",""))
-                    .appendQueryParameter("response_type","code")
-                    .appendQueryParameter("redirect_uri",redirect)
-                    .appendQueryParameter("scope",SCOPES)
-                    .appendQueryParameter("resource",RESOURCE)
-                    .appendQueryParameter("state",state)
-                    .appendQueryParameter("nonce",nonce)
-                    .appendQueryParameter("code_challenge_method","S256")
-                    .appendQueryParameter("code_challenge",challenge);
-                if(first)b.appendQueryParameter("agent_name_hint","GO3 GPT Bridge");
-
-                Intent intent=new Intent(Intent.ACTION_VIEW,b.build());
-                activity.runOnUiThread(()->activity.startActivity(intent));
-
-                Socket s=server.accept();
-                BufferedReader br=new BufferedReader(new InputStreamReader(s.getInputStream(),StandardCharsets.UTF_8));
-                String request=br.readLine();
-                String path=(request!=null&&request.startsWith("GET "))?request.split(" ")[1]:"";
-                Uri cb=Uri.parse("http://127.0.0.1"+path);
-
-                String returnedState=cb.getQueryParameter("state");
-                String err=cb.getQueryParameter("error");
-                if(!state.equals(returnedState))throw new IOException("OAuth state mismatch");
-                if(err!=null&&!err.isEmpty())throw new IOException("Sign-in cancelled: "+err);
-
-                String code=cb.getQueryParameter("code");
-                String issued=cb.getQueryParameter("client_id");
-                if(code==null||code.isEmpty())throw new IOException("No authorization code");
-                if(first){
-                    if(issued==null||issued.isEmpty())throw new IOException("No issued client id");
-                    client=issued;
-                }else if(issued!=null&&!issued.isEmpty()&&!issued.equals(client)){
-                    throw new IOException("Unexpected client id");
-                }
-
-                String html="<html><body style='font-family:sans-serif'><h2>GO3 GPT Bridge</h2><p>ההתחברות הצליחה. אפשר לחזור לאפליקציה.</p></body></html>";
-                byte[] body=html.getBytes(StandardCharsets.UTF_8);
-                OutputStream os=s.getOutputStream();
-                String hdr="HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: "+body.length+"\r\nConnection: close\r\n\r\n";
-                os.write(hdr.getBytes(StandardCharsets.US_ASCII));
-                os.write(body); os.flush(); s.close();
-
-                JSONObject tok=exchange(code,client,verifier,redirect);
-                String scopes=tok.optString("scope","");
-                if(!scopes.contains("chatgpt.tokens.use.direct")){
-                    throw new IOException("ChatGPT plan permission was not granted");
-                }
-                String access=tok.optString("access_token","");
-                String refresh=tok.optString("refresh_token","");
-                if(access.isEmpty())throw new IOException("No access token");
-
-                secure.put("access_token",access);
-                if(!refresh.isEmpty())secure.put("refresh_token",refresh);
-                String idt=tok.optString("id_token","");
-                if(!idt.isEmpty())secure.put("id_token",idt);
-                prefs.edit()
-                    .putString("client_id",client)
-                    .putString("scope",scopes)
-                    .putLong("expires_at",System.currentTimeMillis()+Math.max(60,tok.optLong("expires_in",3600))*1000L)
-                    .apply();
-
-                status.accept("מחובר ל-ChatGPT");
-                done.accept(true);
-            }catch(Exception e){
-                status.accept("שגיאת התחברות: "+e.getMessage());
-                done.accept(false);
-            }finally{
-                if(server!=null)try{server.close();}catch(Exception ignored){}
+    public void signIn(Consumer<String> status,Consumer<Boolean> done){
+        BroadcastReceiver receiver=new BroadcastReceiver(){
+            @Override public void onReceive(Context context,Intent intent){
+                if(!AuthCallbackService.ACTION_RESULT.equals(intent.getAction()))return;
+                boolean ok=intent.getBooleanExtra(AuthCallbackService.EXTRA_OK,false);
+                String msg=intent.getStringExtra(AuthCallbackService.EXTRA_MESSAGE);
+                try{ activity.unregisterReceiver(this); }catch(Exception ignored){}
+                status.accept(msg==null?(ok?"מחובר ל-ChatGPT":"שגיאת התחברות"):msg);
+                done.accept(ok);
             }
-        });
+        };
+
+        IntentFilter filter=new IntentFilter(AuthCallbackService.ACTION_RESULT);
+        if(Build.VERSION.SDK_INT>=33)activity.registerReceiver(receiver,filter,Context.RECEIVER_NOT_EXPORTED);
+        else activity.registerReceiver(receiver,filter);
+
+        try{
+            status.accept("מכין התחברות מאובטחת ל-ChatGPT...");
+            int port=findFreePort();
+            String redirect="http://127.0.0.1:"+port+"/auth/callback";
+
+            String state=randomUrl(24);
+            String nonce=randomUrl(24);
+            String verifier=randomUrl(48);
+            String challenge=base64Url(MessageDigest.getInstance("SHA-256")
+                .digest(verifier.getBytes(StandardCharsets.US_ASCII)));
+
+            String savedClient=prefs.getString("client_id","");
+            boolean first=savedClient.isEmpty();
+            String client=first?"dynamic_agent_client":savedClient;
+
+            Uri.Builder b=Uri.parse(AUTH).buildUpon()
+                .appendQueryParameter("client_id",client)
+                .appendQueryParameter("ext_agent_host_id",prefs.getString("host_id",""))
+                .appendQueryParameter("response_type","code")
+                .appendQueryParameter("redirect_uri",redirect)
+                .appendQueryParameter("scope",SCOPES)
+                .appendQueryParameter("resource",RESOURCE)
+                .appendQueryParameter("state",state)
+                .appendQueryParameter("nonce",nonce)
+                .appendQueryParameter("code_challenge_method","S256")
+                .appendQueryParameter("code_challenge",challenge);
+            if(first)b.appendQueryParameter("agent_name_hint","GO3 GPT Bridge");
+
+            Intent service=new Intent(activity,AuthCallbackService.class);
+            service.putExtra("port",port);
+            service.putExtra("state",state);
+            service.putExtra("verifier",verifier);
+            service.putExtra("client_id",client);
+            service.putExtra("first",first);
+            if(Build.VERSION.SDK_INT>=26)activity.startForegroundService(service);
+            else activity.startService(service);
+
+            Uri authorizeUrl=b.build();
+            new Handler(Looper.getMainLooper()).postDelayed(()->{
+                try{
+                    status.accept("השלם את ההרשאה בדפדפן...");
+                    Intent browser=new Intent(Intent.ACTION_VIEW,authorizeUrl);
+                    activity.startActivity(browser);
+                }catch(Exception e){
+                    status.accept("לא ניתן לפתוח את הדפדפן: "+e.getMessage());
+                    done.accept(false);
+                }
+            },350);
+
+        }catch(Exception e){
+            try{ activity.unregisterReceiver(receiver); }catch(Exception ignored){}
+            status.accept("שגיאת התחברות: "+e.getMessage());
+            done.accept(false);
+        }
     }
 
-    public String getAccessToken() throws Exception{
+    private int findFreePort()throws Exception{
+        for(int p=1455;p<=1475;p++){
+            try(ServerSocket test=new ServerSocket(p,1,InetAddress.getByName("127.0.0.1"))){
+                return p;
+            }catch(IOException ignored){}
+        }
+        try(ServerSocket test=new ServerSocket(0,1,InetAddress.getByName("127.0.0.1"))){
+            return test.getLocalPort();
+        }
+    }
+
+    public String getAccessToken()throws Exception{
         String access=secure.get("access_token");
         long exp=prefs.getLong("expires_at",0);
-        if(!access.isEmpty() && System.currentTimeMillis()<exp-60000)return access;
+        if(!access.isEmpty()&&System.currentTimeMillis()<exp-60000)return access;
+
         String refresh=secure.get("refresh_token");
         String client=prefs.getString("client_id","");
         if(refresh.isEmpty()||client.isEmpty())throw new IOException("נדרשת התחברות ל-ChatGPT");
@@ -146,14 +136,20 @@ public class ChatGptAuth {
             "&client_id="+enc(client)+
             "&refresh_token="+enc(refresh)+
             "&resource="+enc(RESOURCE);
+
         JSONObject tok=postForm(TOKEN,form);
         access=tok.optString("access_token","");
         if(access.isEmpty())throw new IOException("Token refresh failed");
+
         secure.put("access_token",access);
         String newRefresh=tok.optString("refresh_token","");
         if(!newRefresh.isEmpty())secure.put("refresh_token",newRefresh);
-        prefs.edit().putLong("expires_at",
-            System.currentTimeMillis()+Math.max(60,tok.optLong("expires_in",3600))*1000L).apply();
+        String idt=tok.optString("id_token","");
+        if(!idt.isEmpty())secure.put("id_token",idt);
+
+        prefs.edit()
+            .putLong("expires_at",System.currentTimeMillis()+Math.max(60,tok.optLong("expires_in",3600))*1000L)
+            .apply();
         return access;
     }
 
@@ -162,16 +158,6 @@ public class ChatGptAuth {
         secure.remove("refresh_token");
         secure.remove("id_token");
         prefs.edit().remove("client_id").remove("scope").remove("expires_at").apply();
-    }
-
-    private JSONObject exchange(String code,String client,String verifier,String redirect)throws Exception{
-        String form="grant_type=authorization_code"+
-            "&client_id="+enc(client)+
-            "&code="+enc(code)+
-            "&code_verifier="+enc(verifier)+
-            "&redirect_uri="+enc(redirect)+
-            "&resource="+enc(RESOURCE);
-        return postForm(TOKEN,form);
     }
 
     private JSONObject postForm(String url,String form)throws Exception{
@@ -198,11 +184,14 @@ public class ChatGptAuth {
     }
 
     private String base64Url(byte[] b){
-        return android.util.Base64.encodeToString(b,android.util.Base64.URL_SAFE|android.util.Base64.NO_WRAP|android.util.Base64.NO_PADDING);
+        return android.util.Base64.encodeToString(
+            b,
+            android.util.Base64.URL_SAFE|android.util.Base64.NO_WRAP|android.util.Base64.NO_PADDING
+        );
     }
 
     private String enc(String s)throws Exception{
-        return URLEncoder.encode(s,"UTF-8");
+        return URLEncoder.encode(s==null?"":s,"UTF-8");
     }
 
     private String read(InputStream in)throws Exception{
