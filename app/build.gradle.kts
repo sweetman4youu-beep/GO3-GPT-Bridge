@@ -7,14 +7,26 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.niaman.go3bridge.v081"
+        applicationId = "com.niaman.go3bridge.v090"
         minSdk = 31
         targetSdk = 35
         versionCode = 1
-        versionName = "0.8.1-standalone"
+        versionName = "0.9.0-ble-diagnostic"
+    }
+
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("go3bridge-debug.jks")
+            storePassword = "go3bridge"
+            keyAlias = "go3bridge"
+            keyPassword = "go3bridge"
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = false
         }
