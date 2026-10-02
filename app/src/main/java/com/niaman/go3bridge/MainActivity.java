@@ -100,6 +100,10 @@ public class MainActivity extends Activity {
         load.setOnClickListener(v->pickBank());
         solve.setOnClickListener(v->pickImage());
         notifyTest.setOnClickListener(v->notifyAnswer("בדיקת GO3 Bridge: 1. 0,8 мм"));
+        if(Build.VERSION.SDK_INT<33 ||
+           checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED){
+            notifyAnswer("GO3 Bridge מוכן");
+        }
     }
 
     void connectChatGpt(){
@@ -331,19 +335,32 @@ public class MainActivity extends Activity {
             }
             String compact=text==null?"":text.replace("\n"," ").trim();
             if(compact.length()>220)compact=compact.substring(0,220);
+            Person sender=new Person.Builder().setName("GO3 Bridge").build();
+            Notification.MessagingStyle style=new Notification.MessagingStyle(sender)
+                .setConversationTitle("GO3 Bridge")
+                .addMessage(compact,System.currentTimeMillis(),sender);
             Notification.Builder b=new Notification.Builder(this,ANSWER_CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentTitle("GO3 Bridge")
                 .setContentText(compact)
-                .setStyle(new Notification.BigTextStyle().bigText(compact))
+                .setStyle(style)
                 .setCategory(Notification.CATEGORY_MESSAGE)
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
                 .setPriority(Notification.PRIORITY_HIGH)
-                .setAutoCancel(true)
+                .setAutoCancel(false)
+                .setOngoing(true)
                 .setOnlyAlertOnce(true);
             getSystemService(NotificationManager.class).notify(1001,b.build());
             log("Answer notification sent");
         });
+    }
+
+    @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] grantResults){
+        super.onRequestPermissionsResult(requestCode,permissions,grantResults);
+        if(requestCode==NOTIFY_PERMISSION && grantResults.length>0 &&
+           grantResults[0]==PackageManager.PERMISSION_GRANTED){
+            notifyAnswer("GO3 Bridge מוכן");
+        }
     }
 
     void show(String s){runOnUiThread(()->result.setText(s));}

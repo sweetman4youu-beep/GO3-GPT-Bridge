@@ -5,7 +5,10 @@
 
     <application
         android:allowBackup="true"
-        android:label="GO3 GPT Bridge Safe"
+        android:label="GO3 Bridge"
+        android:icon="@drawable/ic_go3_bridge"
+        android:roundIcon="@drawable/ic_go3_bridge"
+        android:appCategory="productivity"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
