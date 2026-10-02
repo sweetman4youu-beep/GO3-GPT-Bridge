@@ -18,8 +18,20 @@ public class OpenAiHelper {
     }
 
     String solveImage(byte[] image,String mime)throws Exception{
-        return vision(image,mime,
-            "Recognize the photo and solve the question. Return only the correct answer or option, very short. If uncertain return NOT_FOUND.");
+        return solveImageWithContext(image,mime,"");
+    }
+
+    String solveImageWithContext(byte[] image,String mime,String context)throws Exception{
+        String prompt=
+            "Recognize the photo and solve the multiple-choice question. "+
+            "You must make a best-effort choice and return one answer; do not return NOT_FOUND or 'uncertain'. "+
+            "Reason carefully using the visible question, answer choices, traffic-rule knowledge, and any related reference from the saved question bank. "+
+            "The bank reference may be similar rather than identical, so use it as supporting context only and do not blindly copy its answer. "+
+            "Return only: option number + answer text, very short.";
+        if(context!=null&&!context.trim().isEmpty()){
+            prompt+="\n\nRELATED QUESTION-BANK REFERENCE:\n"+context;
+        }
+        return vision(image,mime,prompt);
     }
 
     String answerFromRecord(String question,String record)throws Exception{
