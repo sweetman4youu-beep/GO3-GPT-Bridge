@@ -238,9 +238,18 @@ public class MainActivity extends Activity {
                 BankMatcher.Match m=BankMatcher.best(q,bank);
                 if(m!=null)log("Fallback text score: "+String.format(Locale.US,"%.3f",m.score));
 
-                show("לא נמצאה התאמה בטוחה במאגר • GPT פותר...");
-                String solved=ai.solveImage(image,imageMime);
-                show("GPT\n"+solved);
+                String related="";
+                if(pm!=null&&pm.entry!=null){
+                    related="Ticket "+pm.entry.ticket+", Question "+pm.entry.question+
+                        "\nStored correct answer: "+pm.entry.answer()+
+                        "\nQuestion record:\n"+pm.entry.block;
+                }else if(m!=null){
+                    related=m.block;
+                }
+
+                show("לא נמצאה התאמה בטוחה • GPT מנתח ומכריע...");
+                String solved=ai.solveImageWithContext(image,imageMime,related);
+                show("GPT • ניתוח\n"+solved);
             }catch(Exception e){
                 show("שגיאה: "+e.getMessage());
                 log("Solve error: "+e.getMessage());
