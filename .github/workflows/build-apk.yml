@@ -5,6 +5,9 @@ on:
   push:
     branches: [ main ]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -36,9 +39,20 @@ jobs:
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
-      - name: Upload APK
+      - name: Prepare direct-download APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk GO3-GPT-Bridge-v0.8.1-standalone.apk
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: GO3-GPT-Bridge-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: GO3-GPT-Bridge-v0.8.1-standalone.apk
           if-no-files-found: error
+
+      - name: Publish direct-download release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.8.1-standalone
+          name: GO3 GPT Bridge v0.8.1 Standalone
+          make_latest: true
+          files: GO3-GPT-Bridge-v0.8.1-standalone.apk
