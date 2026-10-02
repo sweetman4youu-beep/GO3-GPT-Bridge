@@ -7,7 +7,7 @@
 
     <application
         android:allowBackup="true"
-        android:label="GO3 GPT Bridge 0.8.1"
+        android:label="GO3 GPT Bridge 0.9"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
@@ -27,7 +27,7 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="go3bridge081" android:host="auth-done" />
+                <data android:scheme="go3bridge090" android:host="auth-done" />
             </intent-filter>
         </activity>
     </application>
