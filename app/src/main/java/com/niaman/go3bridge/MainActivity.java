@@ -1,11 +1,14 @@
 package com.niaman.go3bridge;
 
-import android.app.Activity;
+import android.Manifest;
+import android.app.*;
 import android.content.*;
+import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.ImageDecoder;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
 import android.widget.*;
@@ -20,7 +23,8 @@ import java.util.Locale;
 import java.util.concurrent.*;
 
 public class MainActivity extends Activity {
-    static final int BANK=10, IMAGE=11;
+    static final int BANK=10, IMAGE=11, NOTIFY_PERMISSION=12;
+    static final String ANSWER_CHANNEL="go3_answers";
 
     TextView authStatus, bankStatus, result, diag;
     Button authButton;
@@ -35,6 +39,7 @@ public class MainActivity extends Activity {
         PDFBoxResourceLoader.init(getApplicationContext());
         auth=new ChatGptAuth(this);
         restoreKnowledge();
+        setupAnswerNotifications();
 
         LinearLayout root=new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -73,9 +78,9 @@ public class MainActivity extends Activity {
         solve.setText("2. בחר צילום שאלה ופתור");
         root.addView(solve);
 
-        Button go3=new Button(this);
-        go3.setText("3. סרוק וחבר GO3");
-        root.addView(go3);
+        Button notifyTest=new Button(this);
+        notifyTest.setText("3. בדוק תשובה במשקפיים דרך התראה");
+        root.addView(notifyTest);
 
         result=new TextView(this);
         result.setTextSize(20);
@@ -94,7 +99,7 @@ public class MainActivity extends Activity {
         authButton.setOnClickListener(v->connectChatGpt());
         load.setOnClickListener(v->pickBank());
         solve.setOnClickListener(v->pickImage());
-        go3.setOnClickListener(v->new Go3Ble(this,this::log,s->runOnUiThread(()->log(s))).start());
+        notifyTest.setOnClickListener(v->notifyAnswer("בדיקת GO3 Bridge: 1. 0,8 мм"));
     }
 
     void connectChatGpt(){
@@ -231,6 +236,7 @@ public class MainActivity extends Activity {
                         String a=pm.entry.answer();
                         show("מאגר PDF • כרטיס "+pm.entry.ticket+" / שאלה "+pm.entry.question+
                             "\nתשובה: "+a);
+                        notifyAnswer(a);
                         return;
                     }
                 }
@@ -241,6 +247,7 @@ public class MainActivity extends Activity {
                 show("לא נמצאה התאמה בטוחה במאגר • GPT פותר...");
                 String solved=ai.solveImage(image,imageMime);
                 show("GPT\n"+solved);
+                notifyAnswer(solved);
             }catch(Exception e){
                 show("שגיאה: "+e.getMessage());
                 log("Solve error: "+e.getMessage());
@@ -297,6 +304,46 @@ public class MainActivity extends Activity {
             while((n=in.read(b))>0)out.write(b,0,n);
             return out.toByteArray();
         }
+    }
+
+    void setupAnswerNotifications(){
+        NotificationManager nm=getSystemService(NotificationManager.class);
+        if(Build.VERSION.SDK_INT>=26){
+            NotificationChannel ch=new NotificationChannel(
+                ANSWER_CHANNEL,"GO3 answers",NotificationManager.IMPORTANCE_HIGH);
+            ch.setDescription("Short study answers mirrored through phone notifications");
+            ch.enableVibration(false);
+            ch.setSound(null,null);
+            nm.createNotificationChannel(ch);
+        }
+        if(Build.VERSION.SDK_INT>=33 &&
+           checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED){
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},NOTIFY_PERMISSION);
+        }
+    }
+
+    void notifyAnswer(String text){
+        runOnUiThread(()->{
+            if(Build.VERSION.SDK_INT>=33 &&
+               checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED){
+                log("Notification permission is not granted");
+                return;
+            }
+            String compact=text==null?"":text.replace("\n"," ").trim();
+            if(compact.length()>220)compact=compact.substring(0,220);
+            Notification.Builder b=new Notification.Builder(this,ANSWER_CHANNEL)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle("GO3 Bridge")
+                .setContentText(compact)
+                .setStyle(new Notification.BigTextStyle().bigText(compact))
+                .setCategory(Notification.CATEGORY_MESSAGE)
+                .setVisibility(Notification.VISIBILITY_PUBLIC)
+                .setPriority(Notification.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(true);
+            getSystemService(NotificationManager.class).notify(1001,b.build());
+            log("Answer notification sent");
+        });
     }
 
     void show(String s){runOnUiThread(()->result.setText(s));}
