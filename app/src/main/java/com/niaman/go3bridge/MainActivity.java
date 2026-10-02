@@ -39,7 +39,6 @@ public class MainActivity extends Activity {
         PDFBoxResourceLoader.init(getApplicationContext());
         auth=new ChatGptAuth(this);
         restoreKnowledge();
-        setupAnswerNotifications();
 
         LinearLayout root=new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -79,7 +78,7 @@ public class MainActivity extends Activity {
         root.addView(solve);
 
         Button notifyTest=new Button(this);
-        notifyTest.setText("3. בדוק תשובה במשקפיים דרך התראה");
+        notifyTest.setText("3. בדוק כתיבה שקטה דרך INMO");
         root.addView(notifyTest);
 
         result=new TextView(this);
@@ -99,11 +98,7 @@ public class MainActivity extends Activity {
         authButton.setOnClickListener(v->connectChatGpt());
         load.setOnClickListener(v->pickBank());
         solve.setOnClickListener(v->pickImage());
-        notifyTest.setOnClickListener(v->notifyAnswerNumber("1"));
-        if(Build.VERSION.SDK_INT<33 ||
-           checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED){
-            notifyAnswerNumber("1");
-        }
+        notifyTest.setOnClickListener(v->sendToInmoText("2"));
     }
 
     void connectChatGpt(){
@@ -240,7 +235,7 @@ public class MainActivity extends Activity {
                         String a=pm.entry.answer();
                         show("מאגר PDF • כרטיס "+pm.entry.ticket+" / שאלה "+pm.entry.question+
                             "\nתשובה: "+a);
-                        notifyAnswerNumber(String.valueOf(pm.entry.correctIndex));
+                        sendToInmoText(String.valueOf(pm.entry.correctIndex));
                         return;
                     }
                 }
@@ -251,7 +246,7 @@ public class MainActivity extends Activity {
                 show("לא נמצאה התאמה בטוחה במאגר • GPT פותר...");
                 String solved=ai.solveImage(image,imageMime);
                 show("GPT\n"+solved);
-                notifyAnswerNumber(extractAnswerNumber(solved));
+                sendToInmoText(extractAnswerNumber(solved));
             }catch(Exception e){
                 show("שגיאה: "+e.getMessage());
                 log("Solve error: "+e.getMessage());
@@ -310,22 +305,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    void setupAnswerNotifications(){
-        NotificationManager nm=getSystemService(NotificationManager.class);
-        if(Build.VERSION.SDK_INT>=26){
-            NotificationChannel ch=new NotificationChannel(
-                ANSWER_CHANNEL,"GO3 answers",NotificationManager.IMPORTANCE_HIGH);
-            ch.setDescription("Short study answers mirrored through phone notifications");
-            ch.enableVibration(false);
-            ch.setSound(null,null);
-            nm.createNotificationChannel(ch);
-        }
-        if(Build.VERSION.SDK_INT>=33 &&
-           checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED){
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},NOTIFY_PERMISSION);
-        }
-    }
-
     String extractAnswerNumber(String text){
         if(text==null)return "?";
         java.util.regex.Matcher m=java.util.regex.Pattern
@@ -334,40 +313,56 @@ public class MainActivity extends Activity {
         return m.find()?m.group(1):"?";
     }
 
-    void notifyAnswerNumber(String number){
+    void sendToInmoText(String number){
         runOnUiThread(()->{
-            if(Build.VERSION.SDK_INT>=33 &&
-               checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED){
-                log("Notification permission is not granted");
-                return;
-            }
             String compact=number==null?"?":number.trim();
             if(!compact.matches("[1-9][0-9]*"))compact=extractAnswerNumber(compact);
 
-            Notification.Builder b=new Notification.Builder(this,ANSWER_CHANNEL)
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle(" ")
-                .setContentText(compact)
-                .setCategory(Notification.CATEGORY_STATUS)
-                .setVisibility(Notification.VISIBILITY_PUBLIC)
-                .setPriority(Notification.PRIORITY_HIGH)
-                .setAutoCancel(true)
-                .setOnlyAlertOnce(true)
-                .setSound(null)
-                .setVibrate(new long[]{0L})
-                .setDefaults(0);
+            ClipboardManager clip=(ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
+            if(clip!=null)clip.setPrimaryClip(ClipData.newPlainText("GO3 answer",compact));
 
-            getSystemService(NotificationManager.class).notify(1001,b.build());
-            log("Answer number notification sent: "+compact);
+            Intent share=new Intent(Intent.ACTION_SEND);
+            share.setType("text/plain");
+            share.putExtra(Intent.EXTRA_TEXT,compact);
+            share.putExtra(Intent.EXTRA_SUBJECT,"");
+            share.setPackage("com.inmo.app.googleplay");
+            share.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TOP);
+
+            try{
+                if(share.resolveActivity(getPackageManager())!=null){
+                    startActivity(share);
+                    log("INMO text route opened with number: "+compact);
+                    return;
+                }
+            }catch(Exception e){
+                log("INMO text share route failed: "+e.getMessage());
+            }
+
+            try{
+                Intent view=new Intent(Intent.ACTION_VIEW,
+                    Uri.parse("data:text/plain;charset=utf-8,"+Uri.encode(compact)));
+                view.setPackage("com.inmo.app.googleplay");
+                view.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                if(view.resolveActivity(getPackageManager())!=null){
+                    startActivity(view);
+                    log("INMO text view route opened with number: "+compact);
+                    return;
+                }
+            }catch(Exception e){
+                log("INMO text view route failed: "+e.getMessage());
+            }
+
+            Intent launch=getPackageManager().getLaunchIntentForPackage("com.inmo.app.googleplay");
+            if(launch!=null){
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                startActivity(launch);
+                Toast.makeText(this,"המספר "+compact+" הועתק. INMO Global נפתח.",Toast.LENGTH_LONG).show();
+                log("No exported INMO text handler; number copied: "+compact);
+            }else{
+                Toast.makeText(this,"INMO Global לא נמצא בטלפון",Toast.LENGTH_LONG).show();
+                log("INMO Global package not found");
+            }
         });
-    }
-
-    @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] grantResults){
-        super.onRequestPermissionsResult(requestCode,permissions,grantResults);
-        if(requestCode==NOTIFY_PERMISSION && grantResults.length>0 &&
-           grantResults[0]==PackageManager.PERMISSION_GRANTED){
-            notifyAnswerNumber("1");
-        }
     }
 
     void show(String s){runOnUiThread(()->result.setText(s));}
