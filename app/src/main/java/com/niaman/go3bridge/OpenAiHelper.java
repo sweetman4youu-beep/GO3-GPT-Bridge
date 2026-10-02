@@ -18,13 +18,13 @@ public class OpenAiHelper {
     }
     String answerFromRecord(String question,String record)throws Exception{
         JSONObject j=new JSONObject();
-        j.put("model","gpt-6-sol");
+        j.put("model","gpt-5.6-sol");
         j.put("input","Use only this saved record. Return only its stored correct answer; otherwise NOT_FOUND.\nQuestion:\n"+question+"\nRecord:\n"+record);
         return post(j);
     }
     private String vision(byte[] image,String prompt)throws Exception{
         JSONObject root=new JSONObject();
-        root.put("model","gpt-6-sol");
+        root.put("model","gpt-5.6-sol");
         JSONArray content=new JSONArray();
         content.put(new JSONObject().put("type","input_text").put("text",prompt));
         content.put(new JSONObject().put("type","input_image").put("image_url","data:image/jpeg;base64,"+Base64.getEncoder().encodeToString(image)));
