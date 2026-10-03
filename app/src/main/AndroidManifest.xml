@@ -17,7 +17,7 @@
     <application
         android:allowBackup="true"
         android:usesCleartextTraffic="true"
-        android:label="GO3 GPT Bridge 1.7.0 Practical"
+        android:label="GO3 GPT Bridge 1.7.1 Safe"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
