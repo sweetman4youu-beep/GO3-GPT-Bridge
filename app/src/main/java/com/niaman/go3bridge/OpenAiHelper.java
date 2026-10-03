@@ -19,7 +19,7 @@ public class OpenAiHelper {
 
     String solveImage(byte[] image,String mime)throws Exception{
         return vision(image,mime,
-            "Recognize the photo and solve the question. Return only the correct answer or option, very short. If uncertain return NOT_FOUND.");
+            "Recognize the photo and solve the multiple-choice question. Return only the number of the correct visible option, with no words or punctuation. The question may have 2, 3, 4, or more visible options. If the stored bank did not match, make the best supported choice from the visible question instead of returning NOT_FOUND.");
     }
 
     String answerFromRecord(String question,String record)throws Exception{
