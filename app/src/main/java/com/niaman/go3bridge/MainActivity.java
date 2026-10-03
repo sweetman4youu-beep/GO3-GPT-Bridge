@@ -5,13 +5,18 @@ import android.app.*;
 import android.content.*;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
+import android.database.ContentObserver;
 import android.graphics.Bitmap;
 import android.graphics.ImageDecoder;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.OpenableColumns;
+import android.provider.MediaStore;
 import android.widget.*;
+import android.view.WindowManager;
 
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader;
 import com.tom_roush.pdfbox.pdmodel.PDDocument;
@@ -23,11 +28,15 @@ import java.util.Locale;
 import java.util.concurrent.*;
 
 public class MainActivity extends Activity {
-    static final int BANK=10, IMAGE=11, NOTIFY_PERMISSION=12;
-    static final String ANSWER_CHANNEL="go3_answers_v2";
+    static final int BANK=10, IMAGE=11, IMAGES_PERMISSION=13;
 
-    TextView authStatus, bankStatus, result, diag;
-    Button authButton;
+    TextView authStatus, bankStatus, result, diag, autoStatus;
+    Button authButton, autoButton;
+    boolean autoMode=false;
+    long autoStartedAt=0L;
+    String lastAutoUri="";
+    ContentObserver imageObserver;
+    final Handler mainHandler=new Handler(Looper.getMainLooper());
     String bank="";
     String knowledgeName="";
     QuestionBank questionBank=new QuestionBank();
@@ -81,6 +90,15 @@ public class MainActivity extends Activity {
         notifyTest.setText("3. בדוק כתיבה שקטה דרך INMO");
         root.addView(notifyTest);
 
+        autoButton=new Button(this);
+        autoButton.setText("4. הפעל מצב אוטומטי GO3");
+        root.addView(autoButton);
+
+        autoStatus=new TextView(this);
+        autoStatus.setText("מצב אוטומטי: כבוי");
+        autoStatus.setTextSize(15);
+        root.addView(autoStatus);
+
         result=new TextView(this);
         result.setTextSize(20);
         result.setPadding(12,20,12,20);
@@ -99,6 +117,146 @@ public class MainActivity extends Activity {
         load.setOnClickListener(v->pickBank());
         solve.setOnClickListener(v->pickImage());
         notifyTest.setOnClickListener(v->sendToInmoText("2"));
+        autoButton.setOnClickListener(v->toggleAutoMode());
+        handleIncomingIntent(getIntent());
+    }
+
+    @Override protected void onNewIntent(Intent intent){
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleIncomingIntent(intent);
+    }
+
+    void handleIncomingIntent(Intent intent){
+        if(intent==null)return;
+        String action=intent.getAction();
+        String type=intent.getType();
+        if(Intent.ACTION_SEND.equals(action) && type!=null && type.startsWith("image/")){
+            Uri u=intent.getParcelableExtra(Intent.EXTRA_STREAM);
+            if(u!=null){
+                log("Image received through Android share: "+u);
+                if(auth.isSignedIn()&&!bank.trim().isEmpty())solve(u);
+                else Toast.makeText(this,"קודם התחבר ל-ChatGPT וטען את המאגר",Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    void toggleAutoMode(){
+        if(autoMode){
+            disableAutoMode();
+            return;
+        }
+        if(!auth.isSignedIn()){
+            Toast.makeText(this,"קודם התחבר ל-ChatGPT",Toast.LENGTH_LONG).show();
+            return;
+        }
+        if(bank.trim().isEmpty()){
+            Toast.makeText(this,"קודם טען את ה-PDF המלא",Toast.LENGTH_LONG).show();
+            return;
+        }
+        if(!hasImagePermission()){
+            requestImagePermission();
+            return;
+        }
+        enableAutoMode();
+    }
+
+    boolean hasImagePermission(){
+        if(Build.VERSION.SDK_INT>=33)
+            return checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES)==PackageManager.PERMISSION_GRANTED;
+        return checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE)==PackageManager.PERMISSION_GRANTED;
+    }
+
+    void requestImagePermission(){
+        if(Build.VERSION.SDK_INT>=33)
+            requestPermissions(new String[]{Manifest.permission.READ_MEDIA_IMAGES},IMAGES_PERMISSION);
+        else
+            requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE},IMAGES_PERMISSION);
+    }
+
+    void enableAutoMode(){
+        if(autoMode)return;
+        autoMode=true;
+        autoStartedAt=System.currentTimeMillis()-3000L;
+        lastAutoUri="";
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+        imageObserver=new ContentObserver(mainHandler){
+            @Override public void onChange(boolean selfChange,Uri uri){
+                super.onChange(selfChange,uri);
+                if(!autoMode)return;
+                mainHandler.postDelayed(()->processMediaChange(uri),1200L);
+            }
+        };
+        getContentResolver().registerContentObserver(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,true,imageObserver);
+
+        autoButton.setText("4. עצור מצב אוטומטי");
+        autoStatus.setText("מצב אוטומטי: פעיל • מחכה לתמונה חדשה");
+        log("Auto Input enabled. Watching Android MediaStore for new images.");
+    }
+
+    void disableAutoMode(){
+        autoMode=false;
+        if(imageObserver!=null){
+            try{getContentResolver().unregisterContentObserver(imageObserver);}catch(Exception ignored){}
+            imageObserver=null;
+        }
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        if(autoButton!=null)autoButton.setText("4. הפעל מצב אוטומטי GO3");
+        if(autoStatus!=null)autoStatus.setText("מצב אוטומטי: כבוי");
+        log("Auto Input stopped.");
+    }
+
+    void processMediaChange(Uri changed){
+        if(!autoMode)return;
+        try{
+            Uri u=resolveNewestImage(changed);
+            if(u==null)return;
+            String key=u.toString();
+            if(key.equals(lastAutoUri))return;
+            long added=imageDateAddedMs(u);
+            if(added>0 && added<autoStartedAt)return;
+            lastAutoUri=key;
+            autoStatus.setText("מצב אוטומטי: נמצאה תמונה חדשה • מנתח...");
+            log("Auto Input image: "+u);
+            solve(u);
+        }catch(Exception e){
+            log("Auto Input error: "+e.getMessage());
+        }
+    }
+
+    Uri resolveNewestImage(Uri changed){
+        Uri collection=MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+        if(changed!=null){
+            String last=changed.getLastPathSegment();
+            if(last!=null&&last.matches("\\d+"))return changed;
+        }
+        String[] projection={MediaStore.Images.Media._ID};
+        try(Cursor c=getContentResolver().query(
+            collection,projection,null,null,MediaStore.Images.Media.DATE_ADDED+" DESC")){
+            if(c!=null&&c.moveToFirst()){
+                long id=c.getLong(0);
+                return ContentUris.withAppendedId(collection,id);
+            }
+        }
+        return null;
+    }
+
+    long imageDateAddedMs(Uri u){
+        String[] projection={MediaStore.Images.Media.DATE_ADDED};
+        try(Cursor c=getContentResolver().query(u,projection,null,null,null)){
+            if(c!=null&&c.moveToFirst())return c.getLong(0)*1000L;
+        }catch(Exception ignored){}
+        return 0L;
+    }
+
+    @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] grantResults){
+        super.onRequestPermissionsResult(requestCode,permissions,grantResults);
+        if(requestCode==IMAGES_PERMISSION){
+            if(grantResults.length>0&&grantResults[0]==PackageManager.PERMISSION_GRANTED)enableAutoMode();
+            else Toast.makeText(this,"נדרשת הרשאה לתמונות כדי לזהות צילום חדש אוטומטית",Toast.LENGTH_LONG).show();
+        }
     }
 
     void connectChatGpt(){
@@ -379,6 +537,7 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onDestroy(){
+        disableAutoMode();
         super.onDestroy();
         worker.shutdownNow();
     }
