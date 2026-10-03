@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.bluetooth.*;
 import android.bluetooth.le.*;
 import android.content.pm.PackageManager;
+import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
 
@@ -28,6 +29,8 @@ public class Go3Ble {
     private final Map<BluetoothGatt,Queue<BluetoothGattDescriptor>> descriptorQueues=new HashMap<>();
     private BluetoothLeScanner scanner;
     private boolean scanning=false;
+    private int scanRound=0;
+    private static final int MAX_SCAN_ROUNDS=3;
     private final Set<String> seen=new HashSet<>();
     private static final UUID GO3_SERVICE=UUID.fromString("00002020-0000-1000-8000-00805f9b34fb");
     private static final UUID GO3_WRITE=UUID.fromString("00002021-0000-1000-8000-00805f9b34fb");
@@ -75,28 +78,67 @@ public class Go3Ble {
             }
         }
 
+        // First, try the last BLE address that connected successfully.
+        SharedPreferences prefs=activity.getSharedPreferences("go3_bridge",Activity.MODE_PRIVATE);
+        String lastBle=prefs.getString("go3_ble_addr","");
+        if(lastBle!=null&&!lastBle.isEmpty()){
+            try{
+                BluetoothDevice last=adapter.getRemoteDevice(lastBle);
+                state.accept("מנסה חיבור ישיר ל-GO3 האחרון...");
+                log.accept("Trying cached GO3 BLE address "+lastBle);
+                BluetoothGatt g=last.connectGatt(activity,false,gattCallback,BluetoothDevice.TRANSPORT_LE);
+                gatts.put(lastBle,g);
+                handler.postDelayed(()->{
+                    if(gatts.containsKey(lastBle)){
+                        log.accept("Cached GO3 BLE did not become ready quickly; starting discovery scan in parallel.");
+                        startBleScan(adapter);
+                    }
+                },6000);
+                return;
+            }catch(Exception e){
+                log.accept("Cached GO3 BLE connect failed immediately: "+e.getMessage());
+            }
+        }
+
         scanner=adapter.getBluetoothLeScanner();
         if(scanner==null){
             state.accept("BLE scanner לא זמין");
             return;
         }
 
+        startBleScan(adapter);
+    }
+
+    private void startBleScan(BluetoothAdapter adapter){
+        if(activity.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN)!=PackageManager.PERMISSION_GRANTED)return;
+        if(scanner==null)scanner=adapter.getBluetoothLeScanner();
+        if(scanner==null){state.accept("BLE scanner לא זמין");return;}
         stopScan();
-        for(BluetoothGatt g:gatts.values()){ try{g.close();}catch(Exception ignored){} }
-        gatts.clear();
         seen.clear();
         scanning=true;
-        state.accept("מחפש ערוץ GO3 BLE ישיר...");
-        log.accept("Direct BLE scan started. Target service="+GO3_SERVICE+"; device name is NOT required.");
-        ScanSettings settings=new ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-            .build();
+        scanRound++;
+        state.accept("מחפש GO3 BLE ישיר • ניסיון "+scanRound+"/"+MAX_SCAN_ROUNDS);
+        log.accept("Direct BLE scan round "+scanRound+" started. Target service="+GO3_SERVICE+"; name not required.");
+        ScanSettings settings=new ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build();
         scanner.startScan(new ArrayList<>(),settings,scanCallback);
         handler.postDelayed(()->{
             stopScan();
-            if(gatts.isEmpty()){
-                state.accept("לא נמצא עדיין ערוץ GO3 BLE");
-                log.accept("No GO3 BLE control endpoint found in this scan. Keep glasses awake and press GO once, then scan again.");
+            boolean ready=false;
+            for(BluetoothGatt g:gatts.values()){
+                try{
+                    BluetoothGattService s=g.getService(GO3_SERVICE);
+                    if(s!=null){ready=true;break;}
+                }catch(Exception ignored){}
+            }
+            if(!ready && scanRound<MAX_SCAN_ROUNDS){
+                log.accept("GO3 control not found yet. Restarting scan automatically; wake glasses or press GO once.");
+                handler.postDelayed(()->startBleScan(adapter),1200);
+            }else if(!ready){
+                state.accept("לא נמצא GO3 BLE אחרי 3 ניסיונות");
+                log.accept("No GO3 BLE control endpoint after 3 scan rounds. Keep glasses awake and try again.");
+                scanRound=0;
+            }else{
+                scanRound=0;
             }
         },20000);
     }
@@ -204,6 +246,11 @@ public class Go3Ble {
             }
             if(controlService){
                 stopScan();
+                try{
+                    activity.getSharedPreferences("go3_bridge",Activity.MODE_PRIVATE).edit()
+                        .putString("go3_ble_addr",gatt.getDevice().getAddress()).apply();
+                    log.accept("Saved working GO3 BLE address "+gatt.getDevice().getAddress());
+                }catch(Exception ignored){}
                 state.accept("GO3 BLE ישיר מחובר • שירות 0x2020 נמצא");
                 log.accept("SUCCESS: GO3 control service 0x2020 found. Notifications="+notifyCount+
                     ". Press GO / take a photo now; raw inbound frames will be captured.");
