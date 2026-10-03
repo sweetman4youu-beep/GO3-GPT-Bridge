@@ -21,6 +21,11 @@ public class Go3Ble {
     private final Map<String,BluetoothGatt> gatts=new HashMap<>();
     private BluetoothLeScanner scanner;
     private boolean scanning=false;
+    private final Set<String> seen=new HashSet<>();
+    private static final UUID GO3_SERVICE=UUID.fromString("00002020-0000-1000-8000-00805f9b34fb");
+    private static final UUID GO3_WRITE=UUID.fromString("00002021-0000-1000-8000-00805f9b34fb");
+    private static final UUID GO3_RX1=UUID.fromString("00002022-0000-1000-8000-00805f9b34fb");
+    private static final UUID GO3_RX2=UUID.fromString("00002023-0000-1000-8000-00805f9b34fb");
 
     Go3Ble(Activity activity, Consumer<String> log, Consumer<String> state) {
         this.activity=activity;
@@ -50,28 +55,15 @@ public class Go3Ble {
             return;
         }
 
-        // First try a GO3 that Android already knows. On Samsung, an already-paired
-        // GO3 may not advertise during a normal BLE scan, which is why nRF Connect
-        // can show nothing while the glasses are still paired in Android settings.
+        // The Android Settings entry for GO3 can be the Classic audio endpoint.
+        // Do not mistake that address for the BLE control endpoint. Log it, then
+        // independently scan all BLE advertisements for the GO3 control service.
         for(BluetoothDevice d: adapter.getBondedDevices()){
             String n=safeName(d);
             String u=n.toUpperCase(Locale.ROOT);
             if(u.contains("INMO") || u.contains("GO3")){
-                state.accept("GO3 מזוהה בזיווג • בודק ערוצי תקשורת...");
-                log.accept("Bonded GO3: "+n+" ["+d.getAddress()+"] type="+deviceType(d)+" bond="+d.getBondState());
-                android.os.ParcelUuid[] ids=d.getUuids();
-                if(ids==null || ids.length==0){
-                    log.accept("Cached SDP UUIDs: none");
-                }else{
-                    for(android.os.ParcelUuid id:ids) log.accept("SDP UUID "+id.getUuid());
-                }
-                boolean sdp=false;
-                try{sdp=d.fetchUuidsWithSdp();}catch(Exception e){log.accept("fetchUuidsWithSdp error: "+e.getMessage());}
-                log.accept("SDP refresh requested="+sdp);
-                log.accept("Trying BLE GATT on bonded address as diagnostic...");
-                BluetoothGatt g=d.connectGatt(activity,false,gattCallback,BluetoothDevice.TRANSPORT_LE);
-                gatts.put(d.getAddress(),g);
-                return;
+                log.accept("Paired Android endpoint: "+n+" ["+d.getAddress()+"] type="+deviceType(d)+
+                    " — keeping it only as reference; searching separately for GO3 BLE control.");
             }
         }
 
@@ -82,12 +74,23 @@ public class Go3Ble {
         }
 
         stopScan();
+        for(BluetoothGatt g:gatts.values()){ try{g.close();}catch(Exception ignored){} }
         gatts.clear();
+        seen.clear();
         scanning=true;
-        state.accept("לא נמצא GO3 בזיווג • סורק...");
-        log.accept("No bonded GO3 found. Starting BLE scan for INMO GO3");
-        scanner.startScan(scanCallback);
-        handler.postDelayed(this::stopScan,15000);
+        state.accept("מחפש ערוץ GO3 BLE ישיר...");
+        log.accept("Direct BLE scan started. Target service="+GO3_SERVICE+"; device name is NOT required.");
+        ScanSettings settings=new ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build();
+        scanner.startScan(new ArrayList<>(),settings,scanCallback);
+        handler.postDelayed(()->{
+            stopScan();
+            if(gatts.isEmpty()){
+                state.accept("לא נמצא עדיין ערוץ GO3 BLE");
+                log.accept("No GO3 BLE control endpoint found in this scan. Keep glasses awake and press GO once, then scan again.");
+            }
+        },20000);
     }
 
     void stop(){
@@ -109,23 +112,36 @@ public class Go3Ble {
         @Override public void onScanResult(int callbackType,ScanResult result){
             BluetoothDevice d=result.getDevice();
             if(d==null)return;
+            ScanRecord rec=result.getScanRecord();
             String name=null;
             try{
                 if(activity.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)==PackageManager.PERMISSION_GRANTED)
                     name=d.getName();
             }catch(Exception ignored){}
-            if(name==null&&result.getScanRecord()!=null)name=result.getScanRecord().getDeviceName();
-            if(name==null)return;
+            if(name==null&&rec!=null)name=rec.getDeviceName();
 
-            String upper=name.toUpperCase(Locale.ROOT);
-            if(!upper.contains("INMO GO3"))return;
+            List<android.os.ParcelUuid> advertised=rec==null?null:rec.getServiceUuids();
+            boolean has2020=false;
+            if(advertised!=null){
+                for(android.os.ParcelUuid pu:advertised){
+                    if(GO3_SERVICE.equals(pu.getUuid())){ has2020=true; break; }
+                }
+            }
+            String upper=name==null?"":name.toUpperCase(Locale.ROOT);
+            boolean nameLooksGo3=upper.contains("INMO") || upper.contains("GO3");
 
             String addr=d.getAddress();
+            if((has2020||nameLooksGo3) && seen.add(addr)){
+                log.accept("BLE candidate name="+(name==null?"<unnamed>":name)+
+                    " addr="+addr+" RSSI="+result.getRssi()+
+                    " services="+(advertised==null?"[]":advertised));
+            }
+
+            if(!has2020 && !nameLooksGo3)return;
             if(gatts.containsKey(addr))return;
 
-            log.accept("Found "+name+" ["+addr+"] RSSI "+result.getRssi());
-            state.accept("נמצא "+name+" • מתחבר...");
-
+            state.accept("נמצא מועמד GO3 BLE • מתחבר...");
+            log.accept("Connecting BLE candidate "+addr+" (service2020="+has2020+")");
             if(activity.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)!=PackageManager.PERMISSION_GRANTED)return;
             BluetoothGatt g=d.connectGatt(activity,false,gattCallback,BluetoothDevice.TRANSPORT_LE);
             gatts.put(addr,g);
@@ -159,19 +175,32 @@ public class Go3Ble {
             if(status!=BluetoothGatt.GATT_SUCCESS)return;
 
             int notifyCount=0;
+            boolean controlService=false;
             for(BluetoothGattService s:gatt.getServices()){
                 log.accept(name+" SERVICE "+s.getUuid());
+                if(GO3_SERVICE.equals(s.getUuid())) controlService=true;
                 for(BluetoothGattCharacteristic c:s.getCharacteristics()){
                     int p=c.getProperties();
                     log.accept("  CHAR "+c.getUuid()+" props=0x"+Integer.toHexString(p));
-                    if((p&BluetoothGattCharacteristic.PROPERTY_NOTIFY)!=0 ||
+                    boolean targetRx=GO3_RX1.equals(c.getUuid())||GO3_RX2.equals(c.getUuid());
+                    if(targetRx || (p&BluetoothGattCharacteristic.PROPERTY_NOTIFY)!=0 ||
                        (p&BluetoothGattCharacteristic.PROPERTY_INDICATE)!=0){
                         if(enableNotify(gatt,c))notifyCount++;
                     }
+                    if(GO3_WRITE.equals(c.getUuid())){
+                        log.accept("GO3 write channel 0x2021 FOUND");
+                    }
                 }
             }
-            state.accept(name+": GATT מוכן • notifications "+notifyCount);
-            log.accept(name+" ready. Press the GO button now (single/double/long); incoming bytes will appear below.");
+            if(controlService){
+                stopScan();
+                state.accept("GO3 BLE ישיר מחובר • שירות 0x2020 נמצא");
+                log.accept("SUCCESS: GO3 control service 0x2020 found. Notifications="+notifyCount+
+                    ". Press GO / take a photo now; raw inbound frames will be captured.");
+            }else{
+                state.accept(name+": מחובר אבל 0x2020 לא נמצא");
+                log.accept("Connected candidate has no GO3 service 0x2020; continuing discovery.");
+            }
         }
 
         @Override public void onCharacteristicChanged(BluetoothGatt gatt,BluetoothGattCharacteristic c){
