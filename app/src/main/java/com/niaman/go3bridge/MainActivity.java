@@ -46,13 +46,17 @@ public class MainActivity extends Activity {
     Go3Ble go3Ble;
     Go3MediaProbe mediaProbe;
     Go3CompanionAssociation companionAssociation;
+    Go3PracticalBridge practicalBridge;
     volatile long lastSnapshotEventMs=0;
+    volatile boolean practicalMode=false;
+    volatile String lastSyncedImageUri="";
 
     @Override public void onCreate(Bundle b){
         super.onCreate(b);
         PDFBoxResourceLoader.init(getApplicationContext());
         auth=new ChatGptAuth(this);
         companionAssociation=new Go3CompanionAssociation(this,this::log);
+        practicalBridge=new Go3PracticalBridge(this,this::log);
         mediaProbe=new Go3MediaProbe(this,this::log,(bytes,source)->{
             log("MEDIA IMAGE FOUND: "+source+" bytes="+bytes.length);
             handleDirectGo3Image(bytes);
@@ -64,7 +68,7 @@ public class MainActivity extends Activity {
         root.setPadding(24,24,24,24);
 
         TextView title=new TextView(this);
-        title.setText("GO3 GPT Bridge v1.6.2");
+        title.setText("GO3 GPT Bridge v1.7.0 PRACTICAL");
         title.setTextSize(26);
         root.addView(title);
 
@@ -96,20 +100,24 @@ public class MainActivity extends Activity {
         solve.setText("2. בחר צילום שאלה ופתור");
         root.addView(solve);
 
+        Button practical=new Button(this);
+        practical.setText("3. מצב מעשי: INMO לחיבור + Bridge לפתרון");
+        root.addView(practical);
+
         Button companion=new Button(this);
-        companion.setText("3. רשום את האפליקציה כ-GO3 Companion");
+        companion.setText("4. רשום את האפליקציה כ-GO3 Companion");
         root.addView(companion);
 
         Button go3=new Button(this);
-        go3.setText("4. חבר GO3 ישירות (BLE 0x2020)");
+        go3.setText("5. חבר GO3 ישירות (BLE 0x2020)");
         root.addView(go3);
 
         Button net=new Button(this);
-        net.setText("5. המתן לצילום GO3 ופתור אוטומטית");
+        net.setText("6. המתן לצילום GO3 ופתור אוטומטית");
         root.addView(net);
 
         Button saveReport=new Button(this);
-        saveReport.setText("6. שמור דוח אבחון כ-TXT");
+        saveReport.setText("7. שמור דוח אבחון כ-TXT");
         root.addView(saveReport);
 
         result=new TextView(this);
@@ -129,6 +137,7 @@ public class MainActivity extends Activity {
         authButton.setOnClickListener(v->connectChatGpt());
         load.setOnClickListener(v->pickBank());
         solve.setOnClickListener(v->pickImage());
+        practical.setOnClickListener(v->startPracticalMode());
         companion.setOnClickListener(v->{
             companionAssociation.associate();
             companionAssociation.reportAssociations();
@@ -144,6 +153,24 @@ public class MainActivity extends Activity {
             go3Ble.start();
         });
         saveReport.setOnClickListener(v->saveDiagnosticReport());
+    }
+
+    void startPracticalMode(){
+        practicalMode=true;
+        if(!practicalBridge.ensurePermissions()){
+            log("PRACTICAL: permissions requested. Press Practical Mode again after granting them.");
+            return;
+        }
+        show("פותח INMO Global רק לצורך Session. אחרי שהמשקפיים Ready חזור עם Back.");
+        practicalBridge.launchInmoGlobal();
+    }
+
+    void resumePracticalBridge(){
+        if(!practicalMode)return;
+        log("PRACTICAL: resumed Bridge; connecting directly to GO3 and arming capture.");
+        show("מצב מעשי פעיל • מחבר Bridge וממתין לצילום...");
+        if(go3Ble==null)go3Ble=new Go3Ble(this,this::log,s->runOnUiThread(()->log(s)),this::onGo3Packet);
+        go3Ble.start();
     }
 
     void connectChatGpt(){
@@ -209,17 +236,20 @@ public class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode,int resultCode,Intent data){
         super.onActivityResult(requestCode,resultCode,data);
-        if(resultCode!=RESULT_OK||data==null||data.getData()==null)return;
-        Uri u=data.getData();
-        if(requestCode==BANK)loadKnowledge(u);
-        if(requestCode==IMAGE)solve(u);
-        if(requestCode==SAVE_REPORT)writeDiagnosticReport(u);
+
         if(requestCode==Go3CompanionAssociation.REQ_ASSOC){
             companionAssociation.reportAssociations();
             log("COMPANION: chooser returned resultCode="+resultCode+"; starting GO3 BLE connection automatically.");
             if(go3Ble==null)go3Ble=new Go3Ble(this,this::log,s->runOnUiThread(()->log(s)),this::onGo3Packet);
             new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(()->go3Ble.start(),1000);
+            return;
         }
+
+        if(resultCode!=RESULT_OK||data==null||data.getData()==null)return;
+        Uri u=data.getData();
+        if(requestCode==BANK)loadKnowledge(u);
+        if(requestCode==IMAGE)solve(u);
+        if(requestCode==SAVE_REPORT)writeDiagnosticReport(u);
     }
 
     void loadKnowledge(Uri u){
@@ -377,6 +407,7 @@ public class MainActivity extends Activity {
                 worker.execute(()->{
                     try{Thread.sleep(700);}catch(Exception ignored){}
                     mediaProbe.probeAfterSnapshot();
+                    pollSyncedPhoto(now,12);
                     try{Thread.sleep(1800);}catch(Exception ignored){}
                     mediaProbe.probeAfterSnapshot();
                     try{Thread.sleep(3200);}catch(Exception ignored){}
@@ -419,6 +450,38 @@ public class MainActivity extends Activity {
                 }
             }catch(Exception e){log("Direct capture error: "+e.getMessage());}
         }
+    }
+
+    void pollSyncedPhoto(long sinceMs,int attempts){
+        if(!practicalMode)return;
+        for(int i=0;i<attempts;i++){
+            try{
+                Uri u=practicalBridge.findNewestImageSince(sinceMs);
+                if(u!=null && !u.toString().equals(lastSyncedImageUri)){
+                    lastSyncedImageUri=u.toString();
+                    log("PRACTICAL: synced GO3 photo found in MediaStore -> "+u);
+                    byte[] jpg=normalizeImageToJpeg(u);
+                    handleDirectGo3Image(jpg);
+                    return;
+                }
+                Thread.sleep(1000);
+            }catch(Exception e){
+                log("PRACTICAL: photo polling error: "+e.getMessage());
+            }
+        }
+        log("PRACTICAL: no synced photo appeared within polling window.");
+    }
+
+    String extractAnswerNumber(String s){
+        if(s==null)return "?";
+        java.util.regex.Matcher m=java.util.regex.Pattern.compile("(?<!\\d)([1-4])(?!\\d)").matcher(s);
+        return m.find()?m.group(1):s.trim();
+    }
+
+    void deliverAnswer(String answer){
+        String token=extractAnswerNumber(answer);
+        show("תשובה: "+token);
+        if(practicalMode)practicalBridge.notifyAnswer(token);
     }
 
     String printableAscii(byte[] data){
@@ -466,7 +529,7 @@ public class MainActivity extends Activity {
                     ", stored answer "+pm.entry.correctIndex);
                 if(pm.reliable()){
                     String a=pm.entry.answer();
-                    show("תשובה: "+a);
+                    deliverAnswer(a);
                     return;
                 }
             }
@@ -481,7 +544,7 @@ public class MainActivity extends Activity {
                 related=m.block;
             }
             String solved=ai.solveImageWithContext(image,"image/jpeg",related);
-            show("תשובה: "+solved);
+            deliverAnswer(solved);
         }catch(Exception e){
             show("שגיאה בניתוח צילום GO3: "+e.getMessage());
             log("Direct solve error: "+e.getMessage());
@@ -566,10 +629,20 @@ public class MainActivity extends Activity {
             authButton.setText(signed ? "מחובר ל-ChatGPT" : "Continue with ChatGPT");
             authStatus.setText(signed ? "ChatGPT: מחובר • שימוש בתוכנית ChatGPT" : "ChatGPT: לא מחובר");
         }
+        if(practicalMode){
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(this::resumePracticalBridge,1200);
+        }
     }
 
     @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] grantResults){
         super.onRequestPermissionsResult(requestCode,permissions,grantResults);
+        if(requestCode==Go3PracticalBridge.REQ_PRACTICAL_PERMS){
+            boolean ok=true;
+            for(int r:grantResults)if(r!=android.content.pm.PackageManager.PERMISSION_GRANTED)ok=false;
+            log("PRACTICAL: permission result="+ok);
+            if(ok)startPracticalMode();
+            return;
+        }
         if(requestCode==Go3Ble.REQ_BT){
             boolean ok=true;
             for(int r:grantResults)if(r!=android.content.pm.PackageManager.PERMISSION_GRANTED)ok=false;
