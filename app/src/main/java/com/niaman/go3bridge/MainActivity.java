@@ -69,7 +69,7 @@ public class MainActivity extends Activity {
         root.setPadding(24,24,24,24);
 
         TextView title=new TextView(this);
-        title.setText("GO3 GPT Bridge v1.7.1 SAFE");
+        title.setText("GO3 GPT Bridge v1.7.2 SAFE MEDIA");
         title.setTextSize(26);
         root.addView(title);
 
@@ -148,6 +148,13 @@ public class MainActivity extends Activity {
             go3Ble.start();
         });
         net.setOnClickListener(v->{
+            if(practicalMode){
+                long since=System.currentTimeMillis();
+                log("PRACTICAL SAFE MEDIA: polling Android MediaStore only. No BLE/GATT connection will be opened.");
+                show("מצב בטוח • עכשיו צלם עם GO במשקפיים. מחפש תמונה חדשה בטלפון...");
+                worker.execute(()->pollSyncedPhoto(since,20));
+                return;
+            }
             if(go3Ble==null)go3Ble=new Go3Ble(this,this::log,s->runOnUiThread(()->log(s)),this::onGo3Packet);
             log("Direct capture armed: waiting for GO3 image/event on 0x2022/0x2023.");
             show("ממתין לצילום ישיר מה-GO3...");
@@ -169,7 +176,11 @@ public class MainActivity extends Activity {
 
     void resumePracticalBridge(){
         if(!practicalMode)return;
-        log("PRACTICAL SAFE: INMO Global remains the only BLE owner. Bridge will NOT open a second GATT connection.");
+        if(go3Ble!=null){
+            go3Ble.stop();
+            go3Ble=null;
+        }
+        log("PRACTICAL SAFE: INMO Global remains the only BLE owner. Bridge BLE is stopped.");
         show("מצב בטוח פעיל • INMO Global שומר על חיבור המשקפיים");
     }
 
