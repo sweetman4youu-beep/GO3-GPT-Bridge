@@ -37,6 +37,14 @@ public class MainActivity extends Activity {
     String lastAutoUri="";
     ContentObserver imageObserver;
     final Handler mainHandler=new Handler(Looper.getMainLooper());
+    final Runnable autoPoll=new Runnable(){
+        @Override public void run(){
+            if(!autoMode)return;
+            try{ processNewestMediaStoreImage(); }
+            catch(Exception e){ log("Auto scan error: "+e.getMessage()); }
+            if(autoMode)mainHandler.postDelayed(this,1800L);
+        }
+    };
     String bank="";
     String knowledgeName="";
     QuestionBank questionBank=new QuestionBank();
@@ -192,12 +200,15 @@ public class MainActivity extends Activity {
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,true,imageObserver);
 
         autoButton.setText("4. עצור מצב אוטומטי");
-        autoStatus.setText("מצב אוטומטי: פעיל • מחכה לתמונה חדשה");
-        log("Auto Input enabled. Watching Android MediaStore for new images.");
+        autoStatus.setText("מצב אוטומטי: פעיל • מחכה לצילום GO3");
+        mainHandler.removeCallbacks(autoPoll);
+        mainHandler.post(autoPoll);
+        log("Auto Input enabled. Watching MediaStore + polling DCIM/INMOFolder.");
     }
 
     void disableAutoMode(){
         autoMode=false;
+        mainHandler.removeCallbacks(autoPoll);
         if(imageObserver!=null){
             try{getContentResolver().unregisterContentObserver(imageObserver);}catch(Exception ignored){}
             imageObserver=null;
@@ -224,6 +235,56 @@ public class MainActivity extends Activity {
         }catch(Exception e){
             log("Auto Input error: "+e.getMessage());
         }
+    }
+
+    void processNewestMediaStoreImage(){
+        if(!autoMode)return;
+        Uri u=queryNewestImageSince(autoStartedAt);
+        if(u==null)return;
+        String key=u.toString();
+        if(key.equals(lastAutoUri))return;
+        lastAutoUri=key;
+        autoStatus.setText("מצב אוטומטי: נמצא צילום חדש • מנתח...");
+        log("Auto scan image: "+u);
+        solve(u);
+    }
+
+    Uri queryNewestImageSince(long sinceMs){
+        Uri collection=MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+        String[] projection={
+            MediaStore.Images.Media._ID,
+            MediaStore.Images.Media.DATE_ADDED,
+            MediaStore.Images.Media.RELATIVE_PATH,
+            MediaStore.Images.Media.DISPLAY_NAME
+        };
+        long sinceSec=Math.max(0L,(sinceMs/1000L)-3L);
+        String selection=MediaStore.Images.Media.DATE_ADDED+" >= ?";
+        String[] args={String.valueOf(sinceSec)};
+        String sort=MediaStore.Images.Media.DATE_ADDED+" DESC";
+        try(Cursor cur=getContentResolver().query(collection,projection,selection,args,sort)){
+            if(cur==null)return null;
+            int idCol=cur.getColumnIndexOrThrow(MediaStore.Images.Media._ID);
+            int pathCol=cur.getColumnIndex(MediaStore.Images.Media.RELATIVE_PATH);
+            int nameCol=cur.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME);
+            int checked=0;
+            while(cur.moveToNext()&&checked<25){
+                checked++;
+                long id=cur.getLong(idCol);
+                String path=pathCol>=0?cur.getString(pathCol):"";
+                String name=nameCol>=0?cur.getString(nameCol):"";
+                String p=path==null?"":path.toLowerCase(Locale.ROOT);
+                String n=name==null?"":name.toLowerCase(Locale.ROOT);
+
+                // INMO documentation places synced photos under DCIM/INMOFolder.
+                // Prefer that path, but also accept any newly-added shared image
+                // so firmware/app variants using another shared DCIM folder still work.
+                if(p.contains("inmo") || n.contains("inmo") || checked==1)
+                    return ContentUris.withAppendedId(collection,id);
+            }
+        }catch(Exception e){
+            log("MediaStore query failed: "+e.getMessage());
+        }
+        return null;
     }
 
     Uri resolveNewestImage(Uri changed){
