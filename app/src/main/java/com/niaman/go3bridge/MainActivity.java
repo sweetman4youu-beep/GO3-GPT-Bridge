@@ -45,12 +45,14 @@ public class MainActivity extends Activity {
     ChatGptAuth auth;
     Go3Ble go3Ble;
     Go3MediaProbe mediaProbe;
+    Go3CompanionAssociation companionAssociation;
     volatile long lastSnapshotEventMs=0;
 
     @Override public void onCreate(Bundle b){
         super.onCreate(b);
         PDFBoxResourceLoader.init(getApplicationContext());
         auth=new ChatGptAuth(this);
+        companionAssociation=new Go3CompanionAssociation(this,this::log);
         mediaProbe=new Go3MediaProbe(this,this::log,(bytes,source)->{
             log("MEDIA IMAGE FOUND: "+source+" bytes="+bytes.length);
             handleDirectGo3Image(bytes);
@@ -94,16 +96,20 @@ public class MainActivity extends Activity {
         solve.setText("2. בחר צילום שאלה ופתור");
         root.addView(solve);
 
+        Button companion=new Button(this);
+        companion.setText("3. רשום את האפליקציה כ-GO3 Companion");
+        root.addView(companion);
+
         Button go3=new Button(this);
-        go3.setText("3. חבר GO3 ישירות (BLE 0x2020)");
+        go3.setText("4. חבר GO3 ישירות (BLE 0x2020)");
         root.addView(go3);
 
         Button net=new Button(this);
-        net.setText("4. המתן לצילום GO3 ופתור אוטומטית");
+        net.setText("5. המתן לצילום GO3 ופתור אוטומטית");
         root.addView(net);
 
         Button saveReport=new Button(this);
-        saveReport.setText("5. שמור דוח אבחון כ-TXT");
+        saveReport.setText("6. שמור דוח אבחון כ-TXT");
         root.addView(saveReport);
 
         result=new TextView(this);
@@ -123,6 +129,10 @@ public class MainActivity extends Activity {
         authButton.setOnClickListener(v->connectChatGpt());
         load.setOnClickListener(v->pickBank());
         solve.setOnClickListener(v->pickImage());
+        companion.setOnClickListener(v->{
+            companionAssociation.associate();
+            companionAssociation.reportAssociations();
+        });
         go3.setOnClickListener(v->{
             if(go3Ble==null)go3Ble=new Go3Ble(this,this::log,s->runOnUiThread(()->log(s)),this::onGo3Packet);
             go3Ble.start();
@@ -204,6 +214,10 @@ public class MainActivity extends Activity {
         if(requestCode==BANK)loadKnowledge(u);
         if(requestCode==IMAGE)solve(u);
         if(requestCode==SAVE_REPORT)writeDiagnosticReport(u);
+        if(requestCode==Go3CompanionAssociation.REQ_ASSOC){
+            companionAssociation.reportAssociations();
+            log("COMPANION: association chooser returned; now connect GO3 directly.");
+        }
     }
 
     void loadKnowledge(Uri u){
