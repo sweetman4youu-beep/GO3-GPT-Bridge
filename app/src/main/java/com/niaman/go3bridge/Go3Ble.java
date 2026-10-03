@@ -10,15 +10,22 @@ import android.os.Looper;
 
 import java.util.*;
 import java.util.function.Consumer;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class Go3Ble {
     static final int REQ_BT=4703;
 
+    interface PacketListener {
+        void onPacket(UUID characteristic, byte[] data);
+    }
+
     private final Activity activity;
     private final Consumer<String> state;
     private final Consumer<String> log;
+    private final PacketListener packetListener;
     private final Handler handler=new Handler(Looper.getMainLooper());
     private final Map<String,BluetoothGatt> gatts=new HashMap<>();
+    private final Map<BluetoothGatt,Queue<BluetoothGattDescriptor>> descriptorQueues=new HashMap<>();
     private BluetoothLeScanner scanner;
     private boolean scanning=false;
     private final Set<String> seen=new HashSet<>();
@@ -27,10 +34,11 @@ public class Go3Ble {
     private static final UUID GO3_RX1=UUID.fromString("00002022-0000-1000-8000-00805f9b34fb");
     private static final UUID GO3_RX2=UUID.fromString("00002023-0000-1000-8000-00805f9b34fb");
 
-    Go3Ble(Activity activity, Consumer<String> log, Consumer<String> state) {
+    Go3Ble(Activity activity, Consumer<String> log, Consumer<String> state, PacketListener packetListener) {
         this.activity=activity;
         this.log=log;
         this.state=state;
+        this.packetListener=packetListener;
     }
 
     void start() {
@@ -161,8 +169,10 @@ public class Go3Ble {
             if(newState==BluetoothProfile.STATE_CONNECTED){
                 state.accept(name+": מחובר • קורא שירותים...");
                 log.accept(name+" connected, status="+status);
-                if(activity.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)==PackageManager.PERMISSION_GRANTED)
+                if(activity.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)==PackageManager.PERMISSION_GRANTED){
+                    try{ gatt.requestMtu(517); }catch(Exception ignored){}
                     gatt.discoverServices();
+                }
             }else if(newState==BluetoothProfile.STATE_DISCONNECTED){
                 state.accept(name+": נותק");
                 log.accept(name+" disconnected, status="+status);
@@ -205,7 +215,24 @@ public class Go3Ble {
 
         @Override public void onCharacteristicChanged(BluetoothGatt gatt,BluetoothGattCharacteristic c){
             byte[] v=c.getValue();
-            log.accept(safeName(gatt.getDevice())+" RX "+c.getUuid()+" = "+hex(v));
+            byte[] copy=v==null?new byte[0]:Arrays.copyOf(v,v.length);
+            log.accept(safeName(gatt.getDevice())+" RX "+c.getUuid()+" len="+copy.length+" = "+hex(copy));
+            if(packetListener!=null)packetListener.onPacket(c.getUuid(),copy);
+        }
+
+        @Override public void onMtuChanged(BluetoothGatt gatt,int mtu,int status){
+            log.accept(safeName(gatt.getDevice())+" MTU="+mtu+" status="+status);
+        }
+
+        @Override public void onDescriptorWrite(BluetoothGatt gatt,BluetoothGattDescriptor descriptor,int status){
+            Queue<BluetoothGattDescriptor> q=descriptorQueues.get(gatt);
+            if(q!=null){
+                q.poll();
+                BluetoothGattDescriptor next=q.peek();
+                if(next!=null && activity.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)==PackageManager.PERMISSION_GRANTED){
+                    try{gatt.writeDescriptor(next);}catch(Exception e){log.accept("Descriptor queue error: "+e.getMessage());}
+                }
+            }
         }
 
         @Override public void onCharacteristicRead(BluetoothGatt gatt,BluetoothGattCharacteristic c,int status){
@@ -223,7 +250,10 @@ public class Go3Ble {
                 boolean indicate=(c.getProperties()&BluetoothGattCharacteristic.PROPERTY_INDICATE)!=0 &&
                                  (c.getProperties()&BluetoothGattCharacteristic.PROPERTY_NOTIFY)==0;
                 d.setValue(indicate?BluetoothGattDescriptor.ENABLE_INDICATION_VALUE:BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
-                gatt.writeDescriptor(d);
+                Queue<BluetoothGattDescriptor> q=descriptorQueues.computeIfAbsent(gatt,k->new ArrayDeque<>());
+                boolean idle=q.isEmpty();
+                q.add(d);
+                if(idle)gatt.writeDescriptor(d);
             }
             return true;
         }catch(Exception e){
