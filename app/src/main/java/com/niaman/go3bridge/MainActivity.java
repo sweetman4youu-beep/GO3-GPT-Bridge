@@ -25,6 +25,7 @@ import com.tom_roush.pdfbox.text.PDFTextStripper;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
+import java.util.UUID;
 import java.util.concurrent.*;
 
 public class MainActivity extends Activity {
@@ -32,6 +33,10 @@ public class MainActivity extends Activity {
 
     TextView authStatus, bankStatus, result, diag;
     final StringBuilder diagBuffer=new StringBuilder();
+    final ByteArrayOutputStream rawGo3Capture=new ByteArrayOutputStream();
+    ByteArrayOutputStream jpegCapture=null;
+    int previousGo3Byte=-1;
+    final Object captureLock=new Object();
     Button authButton;
     String bank="";
     String knowledgeName="";
@@ -88,7 +93,7 @@ public class MainActivity extends Activity {
         root.addView(go3);
 
         Button net=new Button(this);
-        net.setText("4. בדוק ערוצי רשת מקומיים של GO3");
+        net.setText("4. המתן לצילום GO3 ופתור אוטומטית");
         root.addView(net);
 
         Button saveReport=new Button(this);
@@ -113,10 +118,15 @@ public class MainActivity extends Activity {
         load.setOnClickListener(v->pickBank());
         solve.setOnClickListener(v->pickImage());
         go3.setOnClickListener(v->{
-            if(go3Ble==null)go3Ble=new Go3Ble(this,this::log,s->runOnUiThread(()->log(s)));
+            if(go3Ble==null)go3Ble=new Go3Ble(this,this::log,s->runOnUiThread(()->log(s)),this::onGo3Packet);
             go3Ble.start();
         });
-        net.setOnClickListener(v->logLocalNetworks());
+        net.setOnClickListener(v->{
+            if(go3Ble==null)go3Ble=new Go3Ble(this,this::log,s->runOnUiThread(()->log(s)),this::onGo3Packet);
+            log("Direct capture armed: waiting for GO3 image/event on 0x2022/0x2023.");
+            show("ממתין לצילום ישיר מה-GO3...");
+            go3Ble.start();
+        });
         saveReport.setOnClickListener(v->saveDiagnosticReport());
     }
 
@@ -332,6 +342,102 @@ public class MainActivity extends Activity {
         }
     }
 
+    void onGo3Packet(UUID characteristic, byte[] data){
+        if(data==null||data.length==0)return;
+        synchronized(captureLock){
+            try{
+                if(rawGo3Capture.size()<4*1024*1024) rawGo3Capture.write(data);
+
+                for(int i=0;i<data.length;i++){
+                    int b=data[i]&0xff;
+                    if(jpegCapture==null){
+                        if(previousGo3Byte==0xff && b==0xd8){
+                            jpegCapture=new ByteArrayOutputStream();
+                            jpegCapture.write(0xff);
+                            jpegCapture.write(0xd8);
+                            log("JPEG start detected in direct GO3 stream on "+characteristic);
+                        }
+                    }else{
+                        jpegCapture.write(b);
+                        byte[] current=jpegCapture.toByteArray();
+                        int n=current.length;
+                        if(n>=2 && (current[n-2]&0xff)==0xff && (current[n-1]&0xff)==0xd9){
+                            byte[] jpg=current;
+                            jpegCapture=null;
+                            previousGo3Byte=-1;
+                            log("JPEG complete from GO3: "+jpg.length+" bytes");
+                            handleDirectGo3Image(jpg);
+                            return;
+                        }
+                        if(jpegCapture.size()>16*1024*1024){
+                            log("Direct JPEG exceeded 16MB; reset capture");
+                            jpegCapture=null;
+                        }
+                    }
+                    previousGo3Byte=b;
+                }
+            }catch(Exception e){log("Direct capture error: "+e.getMessage());}
+        }
+    }
+
+    void handleDirectGo3Image(byte[] jpg){
+        worker.execute(()->{
+            try{
+                File f=new File(getCacheDir(),"go3-direct-capture.jpg");
+                try(FileOutputStream out=new FileOutputStream(f)){out.write(jpg);}
+                log("GO3 image saved locally: "+f.getAbsolutePath());
+                if(!auth.isSignedIn()){
+                    show("התמונה התקבלה מה-GO3 • ChatGPT לא מחובר");
+                    return;
+                }
+                if(bank.trim().isEmpty()){
+                    show("התמונה התקבלה מה-GO3 • טען קודם מאגר PDF/TXT");
+                    return;
+                }
+                solveJpegBytes(jpg);
+            }catch(Exception e){log("Direct image handling error: "+e.getMessage());}
+        });
+    }
+
+    void solveJpegBytes(byte[] image){
+        try{
+            show("צילום GO3 התקבל • מזהה שאלה ותשובות...");
+            String token=auth.getAccessToken();
+            OpenAiHelper ai=new OpenAiHelper(token);
+
+            String q=ai.extractQuestion(image,"image/jpeg");
+            log("Direct GO3 recognized question/options: "+q);
+
+            QuestionBank.Match pm=questionBank.best(q);
+            if(pm!=null&&pm.entry!=null){
+                log("Direct bank match: ticket "+pm.entry.ticket+", question "+pm.entry.question+
+                    ", score "+String.format(Locale.US,"%.3f",pm.score)+
+                    ", second "+String.format(Locale.US,"%.3f",pm.secondScore)+
+                    ", stored answer "+pm.entry.correctIndex);
+                if(pm.reliable()){
+                    String a=pm.entry.answer();
+                    show("תשובה: "+a);
+                    return;
+                }
+            }
+
+            BankMatcher.Match m=BankMatcher.best(q,bank);
+            String related="";
+            if(pm!=null&&pm.entry!=null){
+                related="Ticket "+pm.entry.ticket+", Question "+pm.entry.question+
+                    "\nStored correct answer: "+pm.entry.answer()+
+                    "\nQuestion record:\n"+pm.entry.block;
+            }else if(m!=null){
+                related=m.block;
+            }
+            String solved=ai.solveImageWithContext(image,"image/jpeg",related);
+            show("תשובה: "+solved);
+        }catch(Exception e){
+            show("שגיאה בניתוח צילום GO3: "+e.getMessage());
+            log("Direct solve error: "+e.getMessage());
+        }
+    }
+
     void logLocalNetworks(){
         worker.execute(()->{
             log("=== LOCAL NETWORK DIAGNOSTIC ===");
@@ -418,7 +524,7 @@ public class MainActivity extends Activity {
             boolean ok=true;
             for(int r:grantResults)if(r!=android.content.pm.PackageManager.PERMISSION_GRANTED)ok=false;
             if(ok){
-                if(go3Ble==null)go3Ble=new Go3Ble(this,this::log,s->runOnUiThread(()->log(s)));
+                if(go3Ble==null)go3Ble=new Go3Ble(this,this::log,s->runOnUiThread(()->log(s)),this::onGo3Packet);
                 go3Ble.start();
             }else{
                 log("Bluetooth permission denied");
