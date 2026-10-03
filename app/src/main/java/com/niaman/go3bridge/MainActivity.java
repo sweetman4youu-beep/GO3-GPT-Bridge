@@ -84,7 +84,7 @@ public class MainActivity extends Activity {
         root.addView(solve);
 
         Button go3=new Button(this);
-        go3.setText("3. חבר GO3 ובדוק כפתור GO");
+        go3.setText("3. חבר GO3 ישירות (BLE 0x2020)");
         root.addView(go3);
 
         Button net=new Button(this);
