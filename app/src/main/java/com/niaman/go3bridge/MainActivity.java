@@ -28,9 +28,10 @@ import java.util.Locale;
 import java.util.concurrent.*;
 
 public class MainActivity extends Activity {
-    static final int BANK=10, IMAGE=11;
+    static final int BANK=10, IMAGE=11, SAVE_REPORT=12;
 
     TextView authStatus, bankStatus, result, diag;
+    final StringBuilder diagBuffer=new StringBuilder();
     Button authButton;
     String bank="";
     String knowledgeName="";
@@ -90,6 +91,10 @@ public class MainActivity extends Activity {
         net.setText("4. בדוק ערוצי רשת מקומיים של GO3");
         root.addView(net);
 
+        Button saveReport=new Button(this);
+        saveReport.setText("5. שמור דוח אבחון כ-TXT");
+        root.addView(saveReport);
+
         result=new TextView(this);
         result.setTextSize(20);
         result.setPadding(12,20,12,20);
@@ -112,6 +117,7 @@ public class MainActivity extends Activity {
             go3Ble.start();
         });
         net.setOnClickListener(v->logLocalNetworks());
+        saveReport.setOnClickListener(v->saveDiagnosticReport());
     }
 
     void connectChatGpt(){
@@ -181,6 +187,7 @@ public class MainActivity extends Activity {
         Uri u=data.getData();
         if(requestCode==BANK)loadKnowledge(u);
         if(requestCode==IMAGE)solve(u);
+        if(requestCode==SAVE_REPORT)writeDiagnosticReport(u);
     }
 
     void loadKnowledge(Uri u){
@@ -366,8 +373,34 @@ public class MainActivity extends Activity {
         });
     }
 
+    void saveDiagnosticReport(){
+        Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        i.setType("text/plain");
+        i.putExtra(Intent.EXTRA_TITLE,"GO3-network-diagnostic.txt");
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        startActivityForResult(i,SAVE_REPORT);
+    }
+
+    void writeDiagnosticReport(Uri u){
+        worker.execute(()->{
+            try(OutputStream out=getContentResolver().openOutputStream(u)){
+                if(out==null)throw new IOException("Cannot open report file");
+                String txt;
+                synchronized(diagBuffer){txt=diagBuffer.toString();}
+                out.write(txt.getBytes(StandardCharsets.UTF_8));
+                runOnUiThread(()->Toast.makeText(this,"הדוח נשמר. עכשיו אפשר להעלות אותו לצ'אט.",Toast.LENGTH_LONG).show());
+            }catch(Exception e){log("Save report error: "+e.getMessage());}
+        });
+    }
+
     void show(String s){runOnUiThread(()->result.setText(s));}
-    void log(String s){runOnUiThread(()->diag.setText((diag.getText()+"\n"+s).trim()));}
+    void log(String s){
+        synchronized(diagBuffer){
+            if(diagBuffer.length()>0)diagBuffer.append('\n');
+            diagBuffer.append(s);
+        }
+        runOnUiThread(()->diag.setText(diagBuffer.toString()));
+    }
 
     @Override protected void onResume(){
         super.onResume();
