@@ -44,11 +44,17 @@ public class MainActivity extends Activity {
     final ExecutorService worker=Executors.newSingleThreadExecutor();
     ChatGptAuth auth;
     Go3Ble go3Ble;
+    Go3MediaProbe mediaProbe;
+    volatile long lastSnapshotEventMs=0;
 
     @Override public void onCreate(Bundle b){
         super.onCreate(b);
         PDFBoxResourceLoader.init(getApplicationContext());
         auth=new ChatGptAuth(this);
+        mediaProbe=new Go3MediaProbe(this,this::log,(bytes,source)->{
+            log("MEDIA IMAGE FOUND: "+source+" bytes="+bytes.length);
+            handleDirectGo3Image(bytes);
+        });
         restoreKnowledge();
 
         LinearLayout root=new LinearLayout(this);
@@ -344,6 +350,25 @@ public class MainActivity extends Activity {
 
     void onGo3Packet(UUID characteristic, byte[] data){
         if(data==null||data.length==0)return;
+
+        String printable=printableAscii(data);
+        if(printable.contains("SnapShot") || printable.contains("Snapshot")){
+            long now=System.currentTimeMillis();
+            if(now-lastSnapshotEventMs>3000){
+                lastSnapshotEventMs=now;
+                log("SNAPSHOT EVENT detected on "+characteristic+" -> starting direct SoftAP/media retrieval");
+                show("זוהה צילום GO3 • מחפש את קובץ התמונה ישירות...");
+                worker.execute(()->{
+                    try{Thread.sleep(700);}catch(Exception ignored){}
+                    mediaProbe.probeAfterSnapshot();
+                    try{Thread.sleep(1800);}catch(Exception ignored){}
+                    mediaProbe.probeAfterSnapshot();
+                    try{Thread.sleep(3200);}catch(Exception ignored){}
+                    mediaProbe.probeAfterSnapshot();
+                });
+            }
+        }
+
         synchronized(captureLock){
             try{
                 if(rawGo3Capture.size()<4*1024*1024) rawGo3Capture.write(data);
@@ -378,6 +403,15 @@ public class MainActivity extends Activity {
                 }
             }catch(Exception e){log("Direct capture error: "+e.getMessage());}
         }
+    }
+
+    String printableAscii(byte[] data){
+        StringBuilder s=new StringBuilder();
+        for(byte x:data){
+            int v=x&0xff;
+            if(v>=32&&v<=126)s.append((char)v); else s.append(' ');
+        }
+        return s.toString();
     }
 
     void handleDirectGo3Image(byte[] jpg){
