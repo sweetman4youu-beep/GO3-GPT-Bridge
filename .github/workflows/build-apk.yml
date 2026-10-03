@@ -40,20 +40,20 @@ jobs:
         run: gradle :app:assembleDebug --stacktrace
 
       - name: Prepare APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk GO3-GPT-Bridge-v1.0.2-text.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk GO3-GPT-Bridge-v1.1.0-auto.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GO3-GPT-Bridge-v1.0.2-text
-          path: GO3-GPT-Bridge-v1.0.2-text.apk
+          name: GO3-GPT-Bridge-v1.1.0-auto
+          path: GO3-GPT-Bridge-v1.1.0-auto.apk
           if-no-files-found: error
 
       - name: Publish direct-download release
         if: github.ref == 'refs/heads/final-clean-v080'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.2-text
-          name: GO3 GPT Bridge v1.0.2 Text
+          tag_name: v1.1.0-auto
+          name: GO3 GPT Bridge v1.1.0 Auto
           make_latest: true
-          files: GO3-GPT-Bridge-v1.0.2-text.apk
+          files: GO3-GPT-Bridge-v1.1.0-auto.apk
