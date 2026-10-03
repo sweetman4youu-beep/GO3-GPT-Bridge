@@ -107,6 +107,10 @@ public class MainActivity extends Activity {
         autoStatus.setTextSize(15);
         root.addView(autoStatus);
 
+        Button scanNow=new Button(this);
+        scanNow.setText("5. בדוק עכשיו אם צילום GO3 הגיע לטלפון");
+        root.addView(scanNow);
+
         result=new TextView(this);
         result.setTextSize(20);
         result.setPadding(12,20,12,20);
@@ -126,6 +130,7 @@ public class MainActivity extends Activity {
         solve.setOnClickListener(v->pickImage());
         notifyTest.setOnClickListener(v->sendToInmoText("2"));
         autoButton.setOnClickListener(v->toggleAutoMode());
+        scanNow.setOnClickListener(v->manualScanNow());
         handleIncomingIntent(getIntent());
     }
 
@@ -196,8 +201,10 @@ public class MainActivity extends Activity {
                 mainHandler.postDelayed(()->processMediaChange(uri),1200L);
             }
         };
-        getContentResolver().registerContentObserver(
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,true,imageObserver);
+        Uri watchUri=Build.VERSION.SDK_INT>=29
+            ? MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+            : MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+        getContentResolver().registerContentObserver(watchUri,true,imageObserver);
 
         autoButton.setText("4. עצור מצב אוטומטי");
         autoStatus.setText("מצב אוטומטי: פעיל • מחכה לצילום GO3");
@@ -237,6 +244,65 @@ public class MainActivity extends Activity {
         }
     }
 
+    void manualScanNow(){
+        if(!hasImagePermission()){
+            requestImagePermission();
+            return;
+        }
+        worker.execute(()->{
+            try{
+                Uri u=queryNewestImageSince(System.currentTimeMillis()-10L*60L*1000L);
+                if(u==null){
+                    runOnUiThread(()->{
+                        autoStatus.setText("לא נמצא צילום חדש ב-Android");
+                        Toast.makeText(this,"לא נמצא צילום חדש בטלפון ב-10 הדקות האחרונות",Toast.LENGTH_LONG).show();
+                    });
+                    log("Manual scan: no recent MediaStore image found.");
+                    return;
+                }
+
+                String details=describeImage(u);
+                log("Manual scan latest image: "+details);
+                runOnUiThread(()->autoStatus.setText("נמצא בטלפון: "+details));
+
+                if(auth.isSignedIn()&&!bank.trim().isEmpty()){
+                    runOnUiThread(()->autoStatus.setText("נמצא צילום • מנתח עכשיו..."));
+                    solve(u);
+                }else{
+                    runOnUiThread(()->Toast.makeText(this,
+                        "הצילום נמצא. התחבר ל-ChatGPT וטען PDF כדי לנתח אותו.",
+                        Toast.LENGTH_LONG).show());
+                }
+            }catch(Exception e){
+                log("Manual scan error: "+e.getMessage());
+                runOnUiThread(()->autoStatus.setText("שגיאת בדיקה: "+e.getMessage()));
+            }
+        });
+    }
+
+    String describeImage(Uri u){
+        String[] projection={
+            MediaStore.Images.Media.DISPLAY_NAME,
+            MediaStore.Images.Media.RELATIVE_PATH,
+            MediaStore.Images.Media.DATE_ADDED
+        };
+        try(Cursor cur=getContentResolver().query(u,projection,null,null,null)){
+            if(cur!=null&&cur.moveToFirst()){
+                int n=cur.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME);
+                int p=cur.getColumnIndex(MediaStore.Images.Media.RELATIVE_PATH);
+                int d=cur.getColumnIndex(MediaStore.Images.Media.DATE_ADDED);
+                String name=n>=0?cur.getString(n):"?";
+                String path=p>=0?cur.getString(p):"?";
+                long when=d>=0?cur.getLong(d)*1000L:0L;
+                long age=when>0?Math.max(0,(System.currentTimeMillis()-when)/1000L):-1L;
+                return (path==null?"":path)+(name==null?"":name)+" • "+age+"s ago";
+            }
+        }catch(Exception e){
+            return u+" • "+e.getMessage();
+        }
+        return u.toString();
+    }
+
     void processNewestMediaStoreImage(){
         if(!autoMode)return;
         Uri u=queryNewestImageSince(autoStartedAt);
@@ -250,7 +316,9 @@ public class MainActivity extends Activity {
     }
 
     Uri queryNewestImageSince(long sinceMs){
-        Uri collection=MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+        Uri collection=Build.VERSION.SDK_INT>=29
+            ? MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+            : MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
         String[] projection={
             MediaStore.Images.Media._ID,
             MediaStore.Images.Media.DATE_ADDED,
