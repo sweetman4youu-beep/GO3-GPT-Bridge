@@ -49,6 +49,7 @@ public class MainActivity extends Activity {
     Go3PracticalBridge practicalBridge;
     volatile long lastSnapshotEventMs=0;
     volatile boolean practicalMode=false;
+    volatile long practicalOpenedAt=0;
     volatile String lastSyncedImageUri="";
 
     @Override public void onCreate(Bundle b){
@@ -162,6 +163,7 @@ public class MainActivity extends Activity {
             return;
         }
         show("פותח INMO Global רק לצורך Session. אחרי שהמשקפיים Ready חזור עם Back.");
+        practicalOpenedAt=System.currentTimeMillis();
         practicalBridge.launchInmoGlobal();
     }
 
@@ -629,8 +631,8 @@ public class MainActivity extends Activity {
             authButton.setText(signed ? "מחובר ל-ChatGPT" : "Continue with ChatGPT");
             authStatus.setText(signed ? "ChatGPT: מחובר • שימוש בתוכנית ChatGPT" : "ChatGPT: לא מחובר");
         }
-        if(practicalMode){
-            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(this::resumePracticalBridge,1200);
+        if(practicalMode && practicalOpenedAt>0 && System.currentTimeMillis()-practicalOpenedAt>2500){
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(this::resumePracticalBridge,800);
         }
     }
 
