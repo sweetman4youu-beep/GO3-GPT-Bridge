@@ -6,6 +6,14 @@ import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.ImageDecoder;
 import android.net.Uri;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.LinkProperties;
+import android.net.RouteInfo;
+import java.net.NetworkInterface;
+import java.net.InetAddress;
+import java.util.Enumeration;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
 import android.widget.*;
@@ -78,6 +86,10 @@ public class MainActivity extends Activity {
         go3.setText("3. חבר GO3 ובדוק כפתור GO");
         root.addView(go3);
 
+        Button net=new Button(this);
+        net.setText("4. בדוק ערוצי רשת מקומיים של GO3");
+        root.addView(net);
+
         result=new TextView(this);
         result.setTextSize(20);
         result.setPadding(12,20,12,20);
@@ -99,6 +111,7 @@ public class MainActivity extends Activity {
             if(go3Ble==null)go3Ble=new Go3Ble(this,this::log,s->runOnUiThread(()->log(s)));
             go3Ble.start();
         });
+        net.setOnClickListener(v->logLocalNetworks());
     }
 
     void connectChatGpt(){
@@ -310,6 +323,47 @@ public class MainActivity extends Activity {
             while((n=in.read(b))>0)out.write(b,0,n);
             return out.toByteArray();
         }
+    }
+
+    void logLocalNetworks(){
+        worker.execute(()->{
+            log("=== LOCAL NETWORK DIAGNOSTIC ===");
+            try{
+                ConnectivityManager cm=getSystemService(ConnectivityManager.class);
+                if(cm!=null){
+                    for(Network n:cm.getAllNetworks()){
+                        NetworkCapabilities nc=cm.getNetworkCapabilities(n);
+                        LinkProperties lp=cm.getLinkProperties(n);
+                        StringBuilder b=new StringBuilder();
+                        b.append("NET ").append(n);
+                        if(nc!=null){
+                            b.append(" transports=");
+                            if(nc.hasTransport(NetworkCapabilities.TRANSPORT_WIFI))b.append("WIFI ");
+                            if(nc.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR))b.append("CELL ");
+                            if(nc.hasTransport(NetworkCapabilities.TRANSPORT_VPN))b.append("VPN ");
+                            if(nc.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH))b.append("BT ");
+                        }
+                        if(lp!=null){
+                            b.append(" if=").append(lp.getInterfaceName());
+                            b.append(" addrs=").append(lp.getLinkAddresses());
+                            b.append(" dns=").append(lp.getDnsServers());
+                            for(RouteInfo r:lp.getRoutes()) b.append(" route[").append(r).append("]");
+                        }
+                        log(b.toString());
+                    }
+                }
+                Enumeration<NetworkInterface> en=NetworkInterface.getNetworkInterfaces();
+                while(en!=null&&en.hasMoreElements()){
+                    NetworkInterface ni=en.nextElement();
+                    StringBuilder b=new StringBuilder("IF ");
+                    b.append(ni.getName()).append(" up=").append(ni.isUp()).append(" ");
+                    Enumeration<InetAddress> ia=ni.getInetAddresses();
+                    while(ia.hasMoreElements()) b.append(ia.nextElement().getHostAddress()).append(" ");
+                    log(b.toString().trim());
+                }
+                log("=== END NETWORK DIAGNOSTIC ===");
+            }catch(Exception e){ log("Network diagnostic error: "+e.getMessage()); }
+        });
     }
 
     void show(String s){runOnUiThread(()->result.setText(s));}
