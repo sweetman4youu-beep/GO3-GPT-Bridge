@@ -10,8 +10,8 @@ android {
         applicationId = "com.niaman.go3bridge.safe"
         minSdk = 31
         targetSdk = 35
-        versionCode = 5
-        versionName = "1.1.1-auto-scan"
+        versionCode = 6
+        versionName = "1.1.2-diagnostic"
     }
 
     signingConfigs {
