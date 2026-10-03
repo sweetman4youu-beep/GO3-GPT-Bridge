@@ -10,8 +10,8 @@ android {
         applicationId = "com.niaman.go3bridge.v090"
         minSdk = 31
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.9.1-go-button"
+        versionCode = 3
+        versionName = "1.2.0-direct"
     }
 
     signingConfigs {
