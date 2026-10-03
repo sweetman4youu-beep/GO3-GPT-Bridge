@@ -50,6 +50,21 @@ public class Go3Ble {
             return;
         }
 
+        // First try a GO3 that Android already knows. On Samsung, an already-paired
+        // GO3 may not advertise during a normal BLE scan, which is why nRF Connect
+        // can show nothing while the glasses are still paired in Android settings.
+        for(BluetoothDevice d: adapter.getBondedDevices()){
+            String n=safeName(d);
+            String u=n.toUpperCase(Locale.ROOT);
+            if(u.contains("INMO") || u.contains("GO3")){
+                state.accept("GO3 מזוהה בזיווג • מתחבר ישירות...");
+                log.accept("Direct connect to bonded device: "+n+" ["+d.getAddress()+"]");
+                BluetoothGatt g=d.connectGatt(activity,false,gattCallback,BluetoothDevice.TRANSPORT_LE);
+                gatts.put(d.getAddress(),g);
+                return;
+            }
+        }
+
         scanner=adapter.getBluetoothLeScanner();
         if(scanner==null){
             state.accept("BLE scanner לא זמין");
@@ -59,8 +74,8 @@ public class Go3Ble {
         stopScan();
         gatts.clear();
         scanning=true;
-        state.accept("סורק GO3...");
-        log.accept("BLE scan started. Looking for INMO GO3 only");
+        state.accept("לא נמצא GO3 בזיווג • סורק...");
+        log.accept("No bonded GO3 found. Starting BLE scan for INMO GO3");
         scanner.startScan(scanCallback);
         handler.postDelayed(this::stopScan,15000);
     }
