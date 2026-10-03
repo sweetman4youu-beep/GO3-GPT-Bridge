@@ -10,8 +10,8 @@ android {
         applicationId = "com.niaman.go3bridge.v090"
         minSdk = 31
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2.0-direct"
+        versionCode = 4
+        versionName = "1.2.1-transport-diag"
     }
 
     signingConfigs {
