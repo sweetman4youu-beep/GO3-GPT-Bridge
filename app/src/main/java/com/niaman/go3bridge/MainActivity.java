@@ -111,6 +111,10 @@ public class MainActivity extends Activity {
         scanNow.setText("5. בדוק עכשיו אם צילום GO3 הגיע לטלפון");
         root.addView(scanNow);
 
+        Button inmoProbe=new Button(this);
+        inmoProbe.setText("6. בדוק חיבור ישיר ל-INMO AI");
+        root.addView(inmoProbe);
+
         result=new TextView(this);
         result.setTextSize(20);
         result.setPadding(12,20,12,20);
@@ -131,6 +135,7 @@ public class MainActivity extends Activity {
         notifyTest.setOnClickListener(v->sendToInmoText("2"));
         autoButton.setOnClickListener(v->toggleAutoMode());
         scanNow.setOnClickListener(v->manualScanNow());
+        inmoProbe.setOnClickListener(v->runInmoProbe());
         handleIncomingIntent(getIntent());
     }
 
@@ -386,6 +391,18 @@ public class MainActivity extends Activity {
             if(grantResults.length>0&&grantResults[0]==PackageManager.PERMISSION_GRANTED)enableAutoMode();
             else Toast.makeText(this,"נדרשת הרשאה לתמונות כדי לזהות צילום חדש אוטומטית",Toast.LENGTH_LONG).show();
         }
+    }
+
+    void runInmoProbe(){
+        worker.execute(()->{
+            String report=InmoBridgeProbe.inspect(this);
+            runOnUiThread(()->{
+                diag.setText(report);
+                ClipboardManager clip=(ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
+                if(clip!=null)clip.setPrimaryClip(ClipData.newPlainText("INMO AI probe",report));
+                Toast.makeText(this,"בדיקת INMO הושלמה והועתקה ללוח",Toast.LENGTH_LONG).show();
+            });
+        });
     }
 
     void connectChatGpt(){
