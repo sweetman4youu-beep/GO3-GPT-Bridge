@@ -57,8 +57,18 @@ public class Go3Ble {
             String n=safeName(d);
             String u=n.toUpperCase(Locale.ROOT);
             if(u.contains("INMO") || u.contains("GO3")){
-                state.accept("GO3 מזוהה בזיווג • מתחבר ישירות...");
-                log.accept("Direct connect to bonded device: "+n+" ["+d.getAddress()+"]");
+                state.accept("GO3 מזוהה בזיווג • בודק ערוצי תקשורת...");
+                log.accept("Bonded GO3: "+n+" ["+d.getAddress()+"] type="+deviceType(d)+" bond="+d.getBondState());
+                android.os.ParcelUuid[] ids=d.getUuids();
+                if(ids==null || ids.length==0){
+                    log.accept("Cached SDP UUIDs: none");
+                }else{
+                    for(android.os.ParcelUuid id:ids) log.accept("SDP UUID "+id.getUuid());
+                }
+                boolean sdp=false;
+                try{sdp=d.fetchUuidsWithSdp();}catch(Exception e){log.accept("fetchUuidsWithSdp error: "+e.getMessage());}
+                log.accept("SDP refresh requested="+sdp);
+                log.accept("Trying BLE GATT on bonded address as diagnostic...");
                 BluetoothGatt g=d.connectGatt(activity,false,gattCallback,BluetoothDevice.TRANSPORT_LE);
                 gatts.put(d.getAddress(),g);
                 return;
@@ -191,6 +201,17 @@ public class Go3Ble {
             log.accept("Notify error "+c.getUuid()+": "+e.getMessage());
             return false;
         }
+    }
+
+    private String deviceType(BluetoothDevice d){
+        try{
+            switch(d.getType()){
+                case BluetoothDevice.DEVICE_TYPE_CLASSIC:return "CLASSIC";
+                case BluetoothDevice.DEVICE_TYPE_LE:return "LE";
+                case BluetoothDevice.DEVICE_TYPE_DUAL:return "DUAL";
+                default:return "UNKNOWN";
+            }
+        }catch(Exception e){return "UNKNOWN";}
     }
 
     private String safeName(BluetoothDevice d){
