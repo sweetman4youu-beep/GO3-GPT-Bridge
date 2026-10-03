@@ -64,7 +64,7 @@ public class MainActivity extends Activity {
         root.setPadding(24,24,24,24);
 
         TextView title=new TextView(this);
-        title.setText("GO3 GPT Bridge");
+        title.setText("GO3 GPT Bridge v1.6.2");
         title.setTextSize(26);
         root.addView(title);
 
@@ -216,7 +216,9 @@ public class MainActivity extends Activity {
         if(requestCode==SAVE_REPORT)writeDiagnosticReport(u);
         if(requestCode==Go3CompanionAssociation.REQ_ASSOC){
             companionAssociation.reportAssociations();
-            log("COMPANION: association chooser returned; now connect GO3 directly.");
+            log("COMPANION: chooser returned resultCode="+resultCode+"; starting GO3 BLE connection automatically.");
+            if(go3Ble==null)go3Ble=new Go3Ble(this,this::log,s->runOnUiThread(()->log(s)),this::onGo3Packet);
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(()->go3Ble.start(),1000);
         }
     }
 
